@@ -37,6 +37,7 @@ from torch.optim import SGD
 from torch.nn import BCELoss
 from torch.nn.init import kaiming_uniform_
 from torch.nn.init import xavier_uniform_
+import joblib
 
 class neural_network(nn.Module):
     """Neural network with LSTM layer and fully connected layer"""
@@ -88,25 +89,27 @@ def scale_data(data, full:int):
   norm_data = [i/full for i in data]
   return norm_data
 
-def get_features_and_outcome(num_prev, neuron_positions, isX:bool):
+def get_features_and_outcome(num_prev, neuron_positions):
   """Returns dataframe with features and outcome variables"""
   i = 0
-  norm_features = []
+  features_x = []
+  features_y = []
   
   # scale data (x or y position)
-  if isX:
-    norm_neuron_positions = scale_data([x for (x, y) in neuron_positions], full=width)
-  else:
-    norm_neuron_positions = scale_data([y for (x, y) in neuron_positions], full=width)
+  norm_neuron_positions_x = scale_data([x for (x, y) in neuron_positions], full=width)
+  norm_neuron_positions_y = scale_data([y for (x, y) in neuron_positions], full=width)
     
   # since we need 10 previous frames as features, make sure we stop in time
   while i <= len(neuron_positions) - num_prev -1:
     # each loop = feature for one "sample" (num_prev previous points)
-    norm_features.append(norm_neuron_positions[i:i+num_prev])
+    features_x.append(norm_neuron_positions_x[i:i+num_prev])
+    features_y.append(norm_neuron_positions_y[i:i+num_prev])
     i+=1
 
   # make dataframe with features and outcome variables
-  dict = {'prev_n_position': norm_features, 'curr_position': norm_neuron_positions[num_prev:]} 
+  dict = {'prev_n_x': features_x, 'curr_x': norm_neuron_positions_x[num_prev:], 
+          'prev_n_y': features_y, 'curr_y': norm_neuron_positions_y[num_prev:], 'curr_frame': [i for i in range(num_prev, len(neuron_positions))]
+          } 
   df = pd.DataFrame(dict)
   return df
 
@@ -135,22 +138,40 @@ for video in videos:
     if w > width:
         width = w
 
-# Concatenate all videos into one dataframe
-df_lst = []
+if False:
+  # Concatenate all videos into one dataframe
+  df_lst = []
+  for ava in positions_dct.values():
+      df_lst.append(get_features_and_outcome(10, ava)) # Get features and outcome variables for each video
+  df = pd.concat(df_lst)
+
+  # Separate features X and outcome Y variables
+  X = np.array(df.prev_n_x.tolist())
+  Y = np.array(df.curr_x.tolist())
+
+
+  # Train-test split
+  split = math.floor(len(df)*0.8)
+  x_train = X[:split]
+  x_test = X[split:]
+  y_train = Y[:split]
+  y_test = Y[split:]
+
+
+df_train_lst = []
+df_test_lst=[]
 for ava in positions_dct.values():
-    df_lst.append(get_features_and_outcome(10, ava)) # Get features and outcome variables for each video
-df = pd.concat(df_lst)
+    video_df= get_features_and_outcome(10, ava)
+    split = math.floor(len(video_df)*0.8)
+    df_train_lst.append(video_df[:split]) # Get features and outcome variables for each video
+    df_test_lst.append(video_df[split:]) # Get features and outcome variables for each video
+df_train = pd.concat(df_train_lst)
+df_test = pd.concat(df_test_lst)
 
-# Separate features X and outcome Y variables
-X = np.array(df.prev_n_position.tolist())
-Y = np.array(df.curr_position.tolist())
-
-# Train-test split
-split = math.floor(len(df)*0.8)
-x_train = X[:split]
-x_test = X[split:]
-y_train = Y[:split]
-y_test = Y[split:]
+x_train = np.array(df_train.prev_n_x.tolist())
+x_test = np.array(df_test.prev_n_x.tolist())
+y_train = np.array(df_train.curr_x.tolist())
+y_test = np.array(df_test.curr_x.tolist())
 
 # Create dataset and dataloader
 train_set = CaImagesDataset(x_train,y_train)
@@ -160,29 +181,57 @@ train_loader = DataLoader(train_set,
                           )
 torch.manual_seed(0)
 
-# Create model
-model = neural_network()
 
-# Optimizer and loss function 
-criterion = torch.nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(),lr=0.0001)
+train = True
+try_num = 1 # for saving model
 
-# Training loop
-epochs = 500
-existing_epochs=0
-train_times = {} #key= epoch, value=loss for that epoch
-for i in range(epochs+1):
-    for j,data in enumerate(train_loader):
-        y_pred = model(data[:][0].view(-1,10,1)).reshape(-1)
-        loss = criterion(y_pred,data[:][1])
-        loss.backward()
-        optimizer.step()
-    existing_epochs+=1
-    train_times[existing_epochs] = loss
-    if i%50 == 0:
-        print(existing_epochs,"th iteration : ",loss)
 
-losses = [tsr.detach().numpy().flat[0] for tsr in train_times.values()]
-plt.plot(train_times.keys(), losses)
-plt.title("Train Loss Curve")
-plt.imshow()
+if train:
+  # Create model
+  model = neural_network()
+
+  # Optimizer and loss function 
+  criterion = torch.nn.MSELoss()
+  optimizer = torch.optim.Adam(model.parameters(),lr=0.0001)
+
+  # Training loop
+  epochs = 500
+  existing_epochs=0
+  train_times = {} #key= epoch, value=loss for that epoch
+  for i in range(epochs+1):
+      for j,data in enumerate(train_loader):
+          y_pred = model(data[:][0].view(-1,10,1)).reshape(-1)
+          loss = criterion(y_pred,data[:][1])
+          loss.backward()
+          optimizer.step()
+      existing_epochs+=1
+      train_times[existing_epochs] = loss
+      if i%50 == 0:
+          print(existing_epochs,"th iteration : ",loss)
+  joblib.dump(model, f'model{try_num}.pkl')
+
+else:
+  model = joblib.load(f'model{try_num}.pkl')
+
+# losses = [tsr.detach().numpy().flat[0] for tsr in train_times.values()]
+# plt.plot(train_times.keys(), losses)
+# plt.title("Train Loss Curve")
+
+#training set actual vs predicted
+train_pred = model(train_set[:][0].view(-1,10,1)).view(-1)
+plt.figure()
+plt.plot(train_pred.detach().numpy(),label='predicted')
+plt.plot(train_set[:][1].view(-1),label='original')
+plt.title("Training Set Actual vs Predicted")
+plt.legend()
+
+#test set actual vs predicted
+test_set = CaImagesDataset(x_test,y_test)
+test_pred = model(test_set[:][0].view(-1,10,1)).view(-1)
+plt.figure()
+plt.plot(test_pred.detach().numpy(),label='predicted')
+plt.plot(test_set[:][1].view(-1),label='original')
+plt.title("Test Set Actual vs Predicted")
+plt.legend()
+
+plt.show()

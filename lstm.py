@@ -24,7 +24,7 @@ from sklearn.metrics import mean_squared_error
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, mean_squared_error
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from torch.utils.data import random_split
@@ -39,6 +39,12 @@ from torch.nn.init import kaiming_uniform_
 from torch.nn.init import xavier_uniform_
 import joblib
 import time
+
+# Set seed (for reproducibility)
+# num = 0
+# torch.manual_seed(num)
+# random.seed(num)
+# np.random.seed(num)
 
 class neural_network(nn.Module):
     """Neural network with LSTM layer and fully connected layer"""
@@ -74,7 +80,11 @@ class CaImagesDataset(Dataset):
         return [self.x[idx], self.y[idx]]
 
 def scale_data_scaler(data, opt):
-  """Scales data with MinMaxScaler or StandardScaler"""
+  """Scales data with MinMaxScaler or StandardScaler
+  data: list of data to scale
+  opt: "minmax" or "stand" 
+  
+  Returns scaler and scaled data"""
   if (opt == "minmax"):
     print("minmax")
     scaler = MinMaxScaler(feature_range=(0,1))
@@ -86,12 +96,20 @@ def scale_data_scaler(data, opt):
   return scaler, norm_data
 
 def scale_data(data, full:int):
-  """Scales data with image dimensions"""
+  """Scales data with image dimensions
+  data: list of data to scale
+  full: image dimension (height or width)
+  
+  Returns scaled data"""
   norm_data = [i/full for i in data]
   return norm_data
 
 def unscale_data(data, full:int):
-  """"""
+  """Unscales data with image dimensions
+  data: list of data to scale
+  full: image dimension (height or width)
+  
+  Returns unscaled data"""
   try:
       norm_data = [i*full for i in data]
   except:
@@ -99,14 +117,18 @@ def unscale_data(data, full:int):
   return np.array(norm_data)
 
 def get_features_and_outcome(num_prev, neuron_positions):
-  """Returns dataframe with features and outcome variables"""
+  """Returns dataframe with features and outcome variables
+  num_prev: number of previous frames to use as features
+  neuron_positions: list of neuron positions (x, y)
+  
+  Returns dataframe with features and outcome variables"""
   i = 0
   features_x = []
   features_y = []
   
   # scale data (x or y position)
   norm_neuron_positions_x = scale_data([x for (x, y) in neuron_positions], full=width)
-  norm_neuron_positions_y = scale_data([y for (x, y) in neuron_positions], full=width)
+  norm_neuron_positions_y = scale_data([y for (x, y) in neuron_positions], full=height)
     
   # since we need 10 previous frames as features, make sure we stop in time
   while i <= len(neuron_positions) - num_prev -1:
@@ -123,6 +145,9 @@ def get_features_and_outcome(num_prev, neuron_positions):
   return df
 
 def find_centroids(segmented_img):
+  """Returns list of centroids of segmented image
+  segmented_img: segmented image (binary)
+  """
   centroids = []
   cont, hierarchy = cv2.findContours(segmented_img, 
                           cv2.RETR_EXTERNAL, 
@@ -137,10 +162,15 @@ def find_centroids(segmented_img):
   return centroids
 
 def get_dist_score(x, y, x2, y2):
+  """Returns distance score between two points
+  x, y: coordinates of point 1
+  x2, y2: coordinates of point 2"""
   return ((x2-x)**2)+((y2-y)**2)
 
 def get_closest_cent(centroids:List, pred:Tuple):
-    """ Returns the closest centroid to the predicted coordinates"""
+    """ Returns the closest centroid to the predicted coordinates
+    centroids: list of centroids
+    pred: predicted coordinates"""
     max_score = 10**1000
     predx, predy = pred
     coords = (0,0) # Closest to predicted coords
@@ -153,29 +183,28 @@ def get_closest_cent(centroids:List, pred:Tuple):
         coords = (pot_x, pot_y)
     return coords
 
-# Set seed (for reproducibility)
-num = 0
-torch.manual_seed(num)
-random.seed(num)
-np.random.seed(num)
+def get_norm_width_height(videos, imgs_dct, positions_dct):
+  width, height = 0, 0 
+  for video in videos:
+      # Save imgs and positions in dictionary
+      imgs_dct[video] = np.load(f"./data/imgs/{video}_crop.nd2.npy")
+      positions_dct[video] = np.load(f"./data/positions/AVA_{video}.mat.npy")
+      print(f"Loaded {video}")
+      h, w = imgs_dct[video].shape[2:]
+      if h > height:
+          height = h
+      if w > width:
+          width = w
+  return width, height
 
-# constants
+# SET CONSTANTS
+
 videos = ['11409', "11410", '11411', '11413', '11414', '11415']
 imgs_dct = {}
 positions_dct={}
-
-# Get max height and width between all videos (for scaling)
-height, width = 0, 0 
-for video in videos:
-    # Save imgs and positions in dictionary
-    imgs_dct[video] = np.load(f"./data/imgs/{video}_crop.nd2.npy")
-    positions_dct[video] = np.load(f"./data/positions/AVA_{video}.mat.npy")
-    
-    h, w = imgs_dct[video].shape[2:]
-    if h > height:
-        height = h
-    if w > width:
-        width = w
+width, height = get_norm_width_height(videos, imgs_dct, positions_dct) # Get max height and width between all videos (for scaling)
+print(f"Max width: {width} | Max height: {height}")
+print(f"Finished loading images and positions: {len(imgs_dct)} images, {len(positions_dct)} positions")
 
 if False:
   # Concatenate all videos into one dataframe
@@ -196,7 +225,8 @@ if False:
   y_train = Y[:split]
   y_test = Y[split:]
 
-
+# PREPARE DATA FOR LSTM
+# Train-test split
 df_train_lst = []
 df_test_lst=[]
 for ava in positions_dct.values():
@@ -231,14 +261,17 @@ train_loader2 = DataLoader(train_set2,
                           )
 test_set = CaImagesDataset(x_test,y_test)
 test_set2 = CaImagesDataset(x_test2,y_test2)
+print("Finished creating dataset and dataloader")
 
 
+# TRAIN MODEL
 train = False # True if training x model, False if loading model
-train2 = False # True if training y model, False if loading model
+try_num = 1 # for saving/loading model x
 
-try_num = 1 # for saving model x
-try_num2 = 0 # for saving model y
+train2 = True # True if training y model, False if loading model
+try_num2 = 3 # for saving/loading model y
 
+# Get X model
 if train:
   # Create model
   model = neural_network()
@@ -262,11 +295,19 @@ if train:
       if i%50 == 0:
           print(existing_epochs,"th iteration : ",loss)
   joblib.dump(model, f'model{try_num}.pkl')
+  print(f"saved x model {try_num}")
 
+    # Plot loss curve
+  losses = [tsr.detach().numpy().flat[0] for tsr in train_times.values()]
+  plt.figure()
+  plt.plot(train_times.keys(), losses)
+  plt.title("Train Loss Curve")
+  plt.show()
 else:
   model = joblib.load(f'model{try_num}.pkl')
+  print("loaded x model")
 
-
+# Get Y model
 if train2:
   # Create model
   model2 = neural_network()
@@ -290,15 +331,20 @@ if train2:
       if i%50 == 0:
           print(existing_epochs2,"th iteration : ",loss2)
   joblib.dump(model2, f'ymodel{try_num2}.pkl')
+  print(f"saved y model {try_num}")
 
+  # Plot loss curve
+  losses2 = [tsr.detach().numpy().flat[0] for tsr in train_times2.values()]
+  plt.figure()
+  plt.plot(train_times2.keys(), losses2)
+  plt.title("Train Loss Curve")
+  plt.show()
 else:
   model2 = joblib.load(f'ymodel{try_num2}.pkl')
+  print("loaded y model")
 
-# losses = [tsr.detach().numpy().flat[0] for tsr in train_times.values()]
-# plt.plot(train_times.keys(), losses)
-# plt.title("Train Loss Curve")
-
-#training set actual vs predicted
+# VISUALIZE PREDICTIONS
+# Plot x coordinates actual vs predicted
 fig, ax = plt.subplots(1,2)
 train_pred = model(train_set[:][0].view(-1,10,1)).view(-1)
 test_pred = model(test_set[:][0].view(-1,10,1)).view(-1)
@@ -314,102 +360,27 @@ ax[1].title.set_text("Test Set Actual vs Predicted (X Coordinates)")
 ax[1].legend()
 plt.show()
 
+# Plot y coordinates actual vs predicted
 fig2, ax2 = plt.subplots(1,2)
 train_pred2 = model(train_set2[:][0].view(-1,10,1)).view(-1)
 test_pred2 = model(test_set2[:][0].view(-1,10,1)).view(-1)
 
 ax2[0].plot(train_pred2.detach().numpy(),label='predicted')
 ax2[0].plot(train_set2[:][1].view(-1),label='original')
-ax2[0].title.set_text("Training Set Actual vs Predicted (X Coordinates)")
+ax2[0].title.set_text("Training Set Actual vs Predicted (Y Coordinates)")
 ax2[0].legend()
 
 ax2[1].plot(test_pred2.detach().numpy(),label='predicted')
 ax2[1].plot(test_set2[:][1].view(-1),label='original')
-ax2[1].title.set_text("Test Set Actual vs Predicted (X Coordinates)")
+ax2[1].title.set_text("Test Set Actual vs Predicted (Y Coordinates)")
 ax2[1].legend()
 plt.show()
 
-
-inputx = np.array(scale_data([x for (x, y) in ava][:10], width)).reshape((-1, 1))
-inputy = np.array(scale_data([y for (x, y) in ava][:10], height)).reshape((-1, 1))
-
-start_time = time.time() 
-
-n_input=10 # number of previous frames to use as features
-num_correct = 0 # number of correct predictions
-num_wrong = 0 # number of wrong predictions
-frame_reset_pts = {} # dictionary of frames to reset at (key: frame, value: predicted (x, y) coordinates)
-streak_dct = {} # dictionary of streaks (key: frame, value: streak count)
-streak_count = 0
-
-# Dictionaries for plotting
-centroid_dct = {} # key: frame, value: list of centroids
-pred_dct = {} # key: frame, value: (predx, predy)
-chosen_path = {} # key: frame, value: selected (x, y) coordinates
-
-for i in range(0, 201):
-  print(f"frame {i+n_input}")
-
-  # features
-  x_init = torch.from_numpy(np.float32(np.expand_dims(inputx[i:i+n_input].reshape(-1, 1), 0))) # these are normalized values
-  y_init = torch.from_numpy(np.float32(np.expand_dims(inputy[i:i+n_input].reshape(-1, 1), 0))) # these are standardized values
-  print(x_init, y_init)
-  
-  # predicted coordinates
-  predx = unscale_data(model(x_init).detach().numpy()[0][0], full=width)
-  predy = unscale_data(model(y_init).detach().numpy()[0][0], full=height)
-  pred_dct[i]=(predx, predy)
-
-  # actual coordinates
-  actx, acty = ava[i+n_input] 
-
-  # Get list of centroids
-  ground_truth_dir=r'C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\ground_truth\11408'
-  mask = cv2.imread(f"{ground_truth_dir}/{i+n_input}.png", cv2.IMREAD_GRAYSCALE)
-  centroids = find_centroids(mask)  # list of potential centroids
-  centroid_dct[i] = centroids
-
-  # Find closest centroid
-  max_score = 10**1000
-  max_act_score = 10**10000
-  coords = (0,0) # Closest to predicted coords
-  coords_act = (0,0) # Closest to actual coords
-
-  for (pot_x, pot_y) in centroids:
-    score = get_dist_score(predx, predy, pot_x, pot_y)
-    act_score = get_dist_score(actx, acty, pot_x, pot_y)
-    print(f"Centroid: {pot_x}, {pot_y} | Score: {round(score)}")
-    if score <= max_score:
-      max_score = score
-      coords = (pot_x, pot_y)
-    if act_score <= max_act_score:
-      max_act_score = score
-      coords_act = (pot_x, pot_y)
-
-  print(f"Original Prediction: {'%.2f'%(predx)}, {'%.2f'%(predy)}")
-  print(f"Actual Coords: {'%.2f'%(actx)}, {'%.2f'%(acty)}")
-  print(f"Closest to Pred Coords: {coords[0]}, {coords[1]}") # last element = most recently appended "curr"
-  print(f"Closest to Actual Coords: {coords_act[0]}, {coords_act[1]}") # last element = most recently appended "curr"
-
-
-  # prediction is correct if closest centroid to predicted coords is the same as closest centroid to actual coords
-  if (coords[0] == coords_act[0]):
-    print("Correct")
-    num_correct +=1
-    inputx = np.append(inputx, unscale_data(np.array(coords[0]).reshape(-1, 1)[0][0], width)) 
-    inputy = np.append(inputy,  unscale_data(np.array(coords[1]).reshape(-1, 1)[0][0], height))
-    streak_count+=1
-  else:
-    print("False")
-    num_wrong +=1
-    frame_reset_pts[i+n_input] = (predx, predy)
-    actual_norm_x = scale_data(ava[i+n_input][0].reshape(-1, 1), width)
-    actual_norm_y = scale_data(ava[i+n_input][1].reshape(-1, 1), height)
-    inputx = np.append(inputx, actual_norm_x) 
-    inputy = np.append(inputy, actual_norm_y)
-    streak_dct[i]=streak_count
-    streak_count=0
-  chosen_path[i] = (coords[0], coords[1])
-  print(f"{num_correct}, {num_wrong}")
-  print("\n")
-print(f"Time: {time.time() -start_time}")
+# EVALUATE MODEL
+# RMSE
+print("X coordinates")
+print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred.view(-1).detach().numpy(), train_set[:][1].view(-1).detach().numpy()))}")
+print(f"Train RMSE: {np.sqrt(mean_squared_error(test_pred.view(-1).detach().numpy(), test_set[:][1].view(-1).detach().numpy()))}")
+print("Y coordinates")
+print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred2.view(-1).detach().numpy(), train_set2[:][1].view(-1).detach().numpy()))}")
+print(f"Train RMSE: {np.sqrt(mean_squared_error(test_pred2.view(-1).detach().numpy(), test_set2[:][1].view(-1).detach().numpy()))}")

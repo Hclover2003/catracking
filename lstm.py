@@ -3,7 +3,6 @@ import os
 import cv2
 import numpy as np;
 import pandas as pd
-import random, tqdm
 import seaborn as sns
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
@@ -140,6 +139,49 @@ def get_features_and_outcome(num_prev, neuron_positions):
   # make dataframe with features and outcome variables
   dict = {'prev_n_x': features_x, 'curr_x': norm_neuron_positions_x[num_prev:], 
           'prev_n_y': features_y, 'curr_y': norm_neuron_positions_y[num_prev:], 'curr_frame': [i for i in range(num_prev, len(neuron_positions))]
+          } 
+  df = pd.DataFrame(dict)
+  return df
+
+def get_features_and_outcome_w_visual(num_prev, neuron_positions, img_dir, max_height, max_width):
+  """Returns dataframe with features and outcome variables
+  num_prev: number of previous frames to use as features
+  neuron_positions: list of neuron positions (x, y)
+  
+  Returns dataframe with features and outcome variables"""
+  i = 0 # index of current frame
+  features_x = []
+  features_y = []
+  features_x_colorhist = []
+  features_x_mean= []
+  features_x_meanstd = []
+  PURPLE = (69, 6, 90)
+  
+  # scale data (x or y position)
+  norm_neuron_positions_x = scale_data([x for (x, y) in neuron_positions], full=width)
+  norm_neuron_positions_y = scale_data([y for (x, y) in neuron_positions], full=height)
+    
+  # since we need 10 previous frames as features, make sure we stop in time
+  while i <= len(neuron_positions) - num_prev -1:
+    frame = i+num_prev
+    
+    # Get features from image
+    img= cv2.imread(img_dir + str(frame) + ".png")
+    img = cv2.copyMakeBorder(img, 0, max_height-img.shape[0], 0, max_width-img.shape[1], borderType=cv2.BORDER_CONSTANT, value=PURPLE)
+    features_x_meanstd.append(np.concatenate(cv2.meanStdDev(img)).flatten())
+    features_x_mean.append(cv2.mean(img)[:3])
+    features_x_colorhist.append(cv2.calcHist([img],[0,1,2],None,[8,8,8],[0,256,0,256,0,256]).flatten())
+    
+    # Get features from neuron positions
+    features_x.append(norm_neuron_positions_x[i:frame])
+    features_y.append(norm_neuron_positions_y[i:frame])
+    i+=1
+
+  # make dataframe with features and outcome variables
+  dict = {'prev_n_x': features_x, 'curr_x': norm_neuron_positions_x[num_prev:], 
+          'prev_n_y': features_y, 'curr_y': norm_neuron_positions_y[num_prev:], 
+          'channel_means': features_x_mean, 'channel_means_std': features_x_meanstd, 'color_hist': features_x_colorhist,
+          'curr_frame': [j for j in range(num_prev, len(neuron_positions))]
           } 
   df = pd.DataFrame(dict)
   return df
@@ -384,3 +426,4 @@ print(f"Train RMSE: {np.sqrt(mean_squared_error(test_pred.view(-1).detach().nump
 print("Y coordinates")
 print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred2.view(-1).detach().numpy(), train_set2[:][1].view(-1).detach().numpy()))}")
 print(f"Train RMSE: {np.sqrt(mean_squared_error(test_pred2.view(-1).detach().numpy(), test_set2[:][1].view(-1).detach().numpy()))}")
+

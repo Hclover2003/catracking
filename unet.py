@@ -103,6 +103,11 @@ class UNet(nn.Module):
         return x
 
 def get_training_augmentation():
+    """ Add augmentation to the training data. Crop it to 256, 256 and flip it horizontally, vertically or rotate it by 90 degrees.
+    
+    Returns:
+        album.Compose: Composed augmentation functions
+    """
     train_transform = [    
         album.RandomCrop(height=256, width=256, always_apply=True), # crop it to 256, 256
         album.OneOf(
@@ -117,13 +122,22 @@ def get_training_augmentation():
     return album.Compose(train_transform)
 
 def get_validation_augmentation():   
-    # Add sufficient padding to ensure image is divisible by 32
+    """ Add augmentation to the validation data. Add padding to make it 1536, 1536. 
+    
+    Returns:
+        album.Compose: Composed augmentation functions
+    """
     test_transform = [
         album.PadIfNeeded(min_height=1536, min_width=1536, always_apply=True, border_mode=0), # crop it to 1536, 1536
     ]
     return album.Compose(test_transform)
 
 def to_tensor(x, **kwargs):
+    """ Convert image to tensor 
+    
+    Returns: 
+        numpy.ndarray: Converted image
+    """
     return x.transpose(2, 0, 1).astype('float32') # convert to tensor
 
 def get_preprocessing(preprocessing_fn=None):
@@ -172,9 +186,9 @@ def one_hot_encode(label, label_values):
     """
     semantic_map = []
     for colour in label_values: # for each "label" (here, it would be black/white or background/neuron)
-        equality = np.equal(label, colour) # Array of boolean values True/False (test if the given label is equal to this particular value in the labels list)
-        class_map = np.all(equality, axis = -1) # A new 
-        semantic_map.append(class_map) # add this bool value to the map
+        equality = np.equal(label, colour) # check if the given label is equal to this particular value in the labels list
+        class_map = np.all(equality, axis = -1) # check if all values in the array are True (if the label is equal to this particular value in the labels list)
+        semantic_map.append(class_map) # append the result to the semantic map
     semantic_map = np.stack(semantic_map, axis=-1) # join sequence of arrays along a new axis
 
     return semantic_map
@@ -265,144 +279,20 @@ class CaImagesDataset(torch.utils.data.Dataset):
     def __len__(self):
         # return length of 
         return len(self.image_paths)
-# Get train and val dataset instances
-train_dataset = CaImagesDataset(
-    x_train_dir, y_train_dir, 
-    augmentation=get_training_augmentation(),
-    preprocessing=get_preprocessing(preprocessing_fn=None),
-    class_rgb_values=class_rgb_values,
-)
 
-valid_dataset = CaImagesDataset(
-    x_valid_dir, y_valid_dir, 
-    augmentation=get_validation_augmentation(),
-    preprocessing=get_preprocessing(preprocessing_fn=None),
-    class_rgb_values=class_rgb_values,
-)
-
-# Get train and val data loaders (load large amounts of data more efficiently)
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=12)
-valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False, num_workers=4)
-
-test_dataset = CaImagesDataset(
-    x_test_dir, 
-    y_test_dir, 
-    augmentation=get_validation_augmentation(), 
-    preprocessing=get_preprocessing(preprocessing_fn=None),   
-    class_rgb_values=class_rgb_values,
-)
-
-test_dataloader = DataLoader(test_dataset)
-
-
-# Set flag to train the model or not. If set to 'False', only prediction is performed (using an older model checkpoint)
-TRAINING = True
-model_num = 2
-## Training Model with Train/Valid Data
-
-if TRAINING:
-    model = UNet()
-else:
-    model2 = joblib.load(f'ymodel{model_num}.pkl')
-
-# Set num of epochs
-EPOCHS = 12
-
-# Set device: `cuda` or `cpu`
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# define loss function
-loss = smp.utils.losses.DiceLoss()
-
-# define metrics
-metrics = [
-    smp.utils.metrics.IoU(threshold=0.5),
-]
-
-# define optimizer
-optimizer = torch.optim.Adam([ 
-    dict(params=model.parameters(), lr=0.00008),
-])
-
-# define data loaders for training and validation sets
-train_epoch = smp.utils.train.TrainEpoch(
-    model, 
-    loss=loss, 
-    metrics=metrics, 
-    optimizer=optimizer,
-    device=DEVICE,
-    verbose=True,
-)
-
-valid_epoch = smp.utils.train.ValidEpoch(
-    model, 
-    loss=loss, 
-    metrics=metrics, 
-    device=DEVICE,
-    verbose=True,
-)
-
-# train model
-if TRAINING:
-    best_iou_score = 0.0 # current best iou score
-    train_logs_list, valid_logs_list = [], [] # train and valid logs
-
-    for i in range(0, EPOCHS):
-        # Perform training & validation
-        print('\nEpoch: {}'.format(i))
-        train_logs = train_epoch.run(train_loader)
-        valid_logs = valid_epoch.run(valid_loader)
-        train_logs_list.append(train_logs)
-        valid_logs_list.append(valid_logs)
-
-        # Save model if a better val IoU score is obtained
-        if best_iou_score < valid_logs['iou_score']:
-            best_iou_score = valid_logs['iou_score']
-            torch.save(model, '/content/gdrive/MyDrive/catracking/best_model.pth')
-            print('Model saved!')
-
-## Using Model to Perform Segmentation on Test Data
-
-# load model
-best_model = torch.load('/content/gdrive/MyDrive/catracking/best_model.pth', map_location=DEVICE)
-print('Loaded UNet model')
-
-class_rgb_values
-
-# create test dataloader to be used with UNet model (with preprocessing operation: to_tensor(...))
-test_dataset = CaImagesDataset(
-    x_test_dir, 
-    y_test_dir, 
-    augmentation=get_validation_augmentation(), 
-    preprocessing=get_preprocessing(preprocessing_fn=None),   
-    class_rgb_values=class_rgb_values,
-)
-
-test_dataloader = DataLoader(test_dataset)
-
-# test dataset for visualization (without preprocessing transformations)
-test_dataset_vis = CaImagesDataset(
-    x_test_dir, y_test_dir, 
-    augmentation=get_validation_augmentation(),
-    class_rgb_values=class_rgb_values,
-)
-
-# get a random test image/mask index
-random_idx = random.randint(0, len(test_dataset_vis)-1)
-image, mask = test_dataset_vis[random_idx]
-
-visualize(
-    original_image = image,
-    ground_truth_mask = colour_code_segmentation(reverse_one_hot(mask), class_rgb_values),
-    one_hot_encoded_mask = reverse_one_hot(mask)
-)
-
-# Notice the images / masks are 1536*1536 because of 18px padding on all sides. 
-# This is to ensure the input image dimensions to UNet model are a multiple of 2 (to account for pooling & transpose conv. operations).
-
-sample_preds_folder = '/content/gdrive/MyDrive/catracking/sample_predictions/'
-if not os.path.exists(sample_preds_folder):
-    os.makedirs(sample_preds_folder)
+def find_centroids(segmented_img):
+  centroids = []
+  cont, hierarchy = cv2.findContours(segmented_img, 
+                          cv2.RETR_EXTERNAL, 
+                          cv2.CHAIN_APPROX_SIMPLE)
+  for c in cont:
+    # compute the center of the contour
+    M = cv2.moments(c)
+    cX = int(M["m10"] / M["m00"])
+    cY = int(M["m01"] / M["m00"])
+    centroids.append((cX, cY))
+  
+  return centroids
 
 # Center crop padded image / mask to original image dims
 def crop_image(image, target_image_dims=[1500,1500,3]):
@@ -416,37 +306,148 @@ def crop_image(image, target_image_dims=[1500,1500,3]):
         padding:image_size - padding,
         :,
     ]
+    
+# Background is black, calcium is white
+class_rgb_values = [(0,0,0), # black
+ (255, 255, 255) # white
+ ]
+class_names=['background', 'calcium']
+
+x_train_dir="/Users/huayinluo/Desktop/code/catracking-1/unet_data/original/train"
+y_train_dir="/Users/huayinluo/Desktop/code/catracking-1/unet_data/ground_truth/train"
+
+x_valid_dir="/Users/huayinluo/Desktop/code/catracking-1/unet_data/original/valid"
+y_valid_dir="/Users/huayinluo/Desktop/code/catracking-1/unet_data/ground_truth/valid"
+
+x_test_dir="/Users/huayinluo/Desktop/code/catracking-1/unet_data/original/test"
+y_test_dir="/Users/huayinluo/Desktop/code/catracking-1/unet_data/ground_truth/test"
+
+
+# Get train and val dataset instances
+train_dataset = CaImagesDataset(
+    x_train_dir, y_train_dir, 
+    augmentation=get_training_augmentation(),
+    preprocessing=get_preprocessing(preprocessing_fn=None),
+    class_rgb_values=class_rgb_values,
+)
+valid_dataset = CaImagesDataset(
+    x_valid_dir, y_valid_dir, 
+    augmentation=get_validation_augmentation(),
+    preprocessing=get_preprocessing(preprocessing_fn=None),
+    class_rgb_values=class_rgb_values,
+)
+
+# Get train and val data loaders (load large amounts of data more efficiently)
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=12)
+valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False, num_workers=4)
+
+
+LOAD = False # True if loading a model, False if creating a new model
+TRAINING = True # True if training, False if testing
+load_num = 1
+save_num = 1
+
+model_folder = "/Users/huayinluo/Desktop/code/catracking-1/models/unet"
+
+if LOAD:
+    model = joblib.load(f'{model_folder}/model{load_num}.pkl')
+else:
+    model = UNet()
+    
+if TRAINING:
+    EPOCHS = 12
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    loss = smp.utils.losses.DiceLoss()
+    metrics = [
+        smp.utils.metrics.IoU(threshold=0.5),
+    ]
+    optimizer = torch.optim.Adam([ 
+        dict(params=model.parameters(), lr=0.00008),
+    ])
+
+    # define data loaders for training and validation sets
+    train_epoch = smp.utils.train.TrainEpoch(
+        model, 
+        loss=loss, 
+        metrics=metrics, 
+        optimizer=optimizer,
+        device=DEVICE,
+        verbose=True,
+    )
+
+    valid_epoch = smp.utils.train.ValidEpoch(
+        model, 
+        loss=loss, 
+        metrics=metrics, 
+        device=DEVICE,
+        verbose=True,
+    )
+    
+    best_iou_score = 0.0 # current best iou score
+    train_logs_list, valid_logs_list = [], [] # train and valid logs
+
+    for i in range(0, EPOCHS):
+        # Perform training & validation
+        print('\nEpoch: {}'.format(i))
+        train_logs = train_epoch.run(train_loader)
+        valid_logs = valid_epoch.run(valid_loader)
+        train_logs_list.append(train_logs)
+        valid_logs_list.append(valid_logs)
+        
+    joblib.dump(model, f'{model_folder}/model{save_num}.pkl')
+    
+## Using Model to Perform Segmentation on Test Data
+# create test dataloader to be used with UNet model (with preprocessing operation: to_tensor(...))
+test_dataset = CaImagesDataset(
+    x_test_dir, 
+    y_test_dir, 
+    augmentation=get_validation_augmentation(), 
+    preprocessing=get_preprocessing(preprocessing_fn=None),   
+    class_rgb_values=class_rgb_values,
+)
+test_dataloader = DataLoader(test_dataset)
+
+# test dataset for visualization (without preprocessing transformations)
+test_dataset_vis = CaImagesDataset(
+    x_test_dir, y_test_dir, 
+    augmentation=get_validation_augmentation(),
+    class_rgb_values=class_rgb_values,
+)
+
+# get a random test image/mask index
+random_idx = random.randint(0, len(test_dataset_vis)-1)
+image, mask = test_dataset_vis[random_idx]
+visualize(
+    original_image = image,
+    ground_truth_mask = colour_code_segmentation(reverse_one_hot(mask), class_rgb_values),
+    one_hot_encoded_mask = reverse_one_hot(mask)
+)
+
+sample_preds_folder = '/Users/huayinluo/Desktop/code/catracking-1/results/unet'
+
 
 # for idx in range(len(test_dataset)):
-
 random_idx = random.randint(0, len(test_dataset)-1)
 image, gt_mask = test_dataset[random_idx] # image and ground truth from test dataset
 image_vis = crop_image(np.transpose(test_dataset[random_idx][0].astype('uint8'), (1, 2, 0)))
 x_tensor = torch.from_numpy(image).to(DEVICE).unsqueeze(0)
+
 # Predict test image
-pred_mask = best_model(x_tensor)
+pred_mask = model(x_tensor)
 pred_mask = pred_mask.detach().squeeze().cpu().numpy()
 # Convert pred_mask from `CHW` format to `HWC` format
 pred_mask = np.transpose(pred_mask,(1,2,0))
-# Get prediction channel corresponding to building
+# Get prediction channel corresponding to calcium
 pred_calcium_heatmap = pred_mask[:,:,class_names.index('calcium')]
 pred_mask = crop_image(colour_code_segmentation(reverse_one_hot(pred_mask), class_rgb_values))
 # Convert gt_mask from `CHW` format to `HWC` format
 gt_mask = np.transpose(gt_mask,(1,2,0))
 gt_mask = crop_image(colour_code_segmentation(reverse_one_hot(gt_mask), class_rgb_values))
 
-image_vis.shape
-
-crop_image(test_dataset[random_idx][0].astype('uint8')).shape
-
-pred_mask.shape
-
-gt_mask.shape
-
 cv2.imwrite(
-    os.path.join(sample_preds_folder, f"sample_pred_{idx}.png"), 
+    os.path.join(sample_preds_folder, f"sample_pred_{i}.png"), 
     np.hstack([image_vis, gt_mask, pred_mask])[:,:,::-1]
-    )    
+    )  
 visualize(
     original_image = image_vis,
     ground_truth_mask = gt_mask,
@@ -469,21 +470,5 @@ print("Evaluation on Test Data: ")
 print(f"Mean IoU Score: {valid_logs['iou_score']:.4f}")
 print(f"Mean Dice Loss: {valid_logs['dice_loss']:.4f}")
 
-## Label Centroids with OpenCV
-
-def find_centroids(segmented_img):
-  centroids = []
-  cont, hierarchy = cv2.findContours(segmented_img, 
-                          cv2.RETR_EXTERNAL, 
-                          cv2.CHAIN_APPROX_SIMPLE)
-  for c in cont:
-    # compute the center of the contour
-    M = cv2.moments(c)
-    cX = int(M["m10"] / M["m00"])
-    cY = int(M["m01"] / M["m00"])
-    centroids.append((cX, cY))
-  
-  return centroids
-    
     
     

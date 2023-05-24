@@ -12,7 +12,6 @@ def save_imgs(imgs, save_dir):
         print(f"{'{0:.2f}'.format(frame/imgs.shape[0])} Progress: Saved {frame}/{imgs.shape[0]} images")
     print("done")
 
-
 def get_blobs_adaptive(img, bound_size, min_brightness_const, min_area):
     im_gauss = cv2.GaussianBlur(img, (5, 5), 0) # "smoothing" the image with Gaussian Blur
     thresh = cv2.adaptiveThreshold(im_gauss,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,bound_size,(min_brightness_const))
@@ -77,8 +76,6 @@ def get_blobs(img, min_brightness=45, min_area=20):
                         -1 # thickness: since negative, fill in the shape
                         )
     return new_img
-
-
 
 def save_og_ground(save_dir, frame, label, save_x_dir, save_y_dir):
     """ Saves original image and ground truth image """

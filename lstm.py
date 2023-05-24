@@ -352,7 +352,8 @@ print("Finished creating dataset and dataloader")
 
 # TRAIN MODEL
 train = False # True if training x model, False if loading model
-load_num = 1 # for saving/loading model x
+load=False
+load_num = 2 # for saving/loading model x
 save_num = 1
 
 train2 = False # True if training y model, False if loading model

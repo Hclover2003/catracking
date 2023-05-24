@@ -159,10 +159,14 @@ if traintestvalid:
     test_i = 0
     for video in videos:
         imgs = np.load(f"{data_dir}/data/imgs/{video}_crop.nd2.npy")
-        # vid_originals = [file for file in os.listdir(f"{data_dir}/original/{video}") if file.endswith(".png")] # get all original images for video
+        vid_originals = [file for file in os.listdir(f"{data_dir}/original/{video}") if file.endswith(".png")] # get all original images for video
         for i in range(imgs.shape[0]):
             if i < train_split*imgs.shape[0]:
                 plt.imsave(f"{x_train_dir}/{train_i}.png", imgs[i, 0, :, :])
+                img = cv2.imread(f"{save_dir}/{frame}", cv2.IMREAD_GRAYSCALE) # read as grayscale
+                thres, blob_img = get_blobs_adaptive(img, bound_size=11, min_brightness_const=-5, min_area=10) # get segmented image (set parameters)
+                plt.imsave(f"{save_x_dir}/{label}.png", img) # save original image (feature)
+                # plt.imsave(f"{save_y_dir}/{label}.png", blob_img, cmap="gray") # save segmented image (label)
                 train_i+=1
             elif i < valid_split*imgs.shape[0]:
                 plt.imsave(f"{x_train_dir}/{valid_i}.png", imgs[i, 0, :, :])

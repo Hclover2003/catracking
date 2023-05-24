@@ -15,6 +15,7 @@ import segmentation_models_pytorch as smp
 import albumentations as album
 import math
 
+from sklearn import model_selection
 from scipy import ndimage
 from typing import Tuple, List
 from scipy import stats
@@ -266,11 +267,13 @@ print("Finished creating dataset and dataloader")
 
 # TRAIN MODEL
 train = False # True if training x model, False if loading model
-try_num = 1 # for saving/loading model x
+load_num = 1 # for saving/loading model x
+save_num = 1
 
-train2 = True # True if training y model, False if loading model
-try_num2 = 3 # for saving/loading model y
-
+train2 = False # True if training y model, False if loading model
+load2=False
+load_num2 = 4 # for saving/loading model y
+save_num2=4
 # Get X model
 if train:
   # Create model
@@ -294,8 +297,8 @@ if train:
       train_times[existing_epochs] = loss
       if i%50 == 0:
           print(existing_epochs,"th iteration : ",loss)
-  joblib.dump(model, f'model{try_num}.pkl')
-  print(f"saved x model {try_num}")
+  joblib.dump(model, f'model{save_num}.pkl')
+  print(f"saved x model {save_num}")
 
     # Plot loss curve
   losses = [tsr.detach().numpy().flat[0] for tsr in train_times.values()]
@@ -304,13 +307,16 @@ if train:
   plt.title("Train Loss Curve")
   plt.show()
 else:
-  model = joblib.load(f'model{try_num}.pkl')
+  model = joblib.load(f'model{load_num}.pkl')
   print("loaded x model")
 
 # Get Y model
 if train2:
   # Create model
-  model2 = neural_network()
+  if load2:
+     model2=joblib.load(f'ymodel{load_num2}.pkl')
+  else:
+    model2 = neural_network()
 
   # Optimizer and loss function 
   criterion2 = torch.nn.MSELoss()
@@ -329,9 +335,9 @@ if train2:
       existing_epochs2+=1
       train_times2[existing_epochs2] = loss2
       if i%50 == 0:
-          print(existing_epochs2,"th iteration : ",loss2)
-  joblib.dump(model2, f'ymodel{try_num2}.pkl')
-  print(f"saved y model {try_num}")
+          print(existing_epochs2,"th iteration : ", loss2)
+  joblib.dump(model2, f'ymodel{save_num2}.pkl')
+  print(f"saved y model {save_num2}")
 
   # Plot loss curve
   losses2 = [tsr.detach().numpy().flat[0] for tsr in train_times2.values()]
@@ -340,7 +346,7 @@ if train2:
   plt.title("Train Loss Curve")
   plt.show()
 else:
-  model2 = joblib.load(f'ymodel{try_num2}.pkl')
+  model2 = joblib.load(f'ymodel{load_num2}.pkl')
   print("loaded y model")
 
 # VISUALIZE PREDICTIONS
@@ -357,6 +363,10 @@ ax[0].legend()
 ax[1].plot(test_pred.detach().numpy(),label='predicted')
 ax[1].plot(test_set[:][1].view(-1),label='original')
 ax[1].title.set_text("Test Set Actual vs Predicted (X Coordinates)")
+
+ax[0].set_xlabel("Frame")
+ax[0].set_ylabel("X Coordinates")
+ax[1].set_xlabel("Frame")
 ax[1].legend()
 plt.show()
 
@@ -373,14 +383,37 @@ ax2[0].legend()
 ax2[1].plot(test_pred2.detach().numpy(),label='predicted')
 ax2[1].plot(test_set2[:][1].view(-1),label='original')
 ax2[1].title.set_text("Test Set Actual vs Predicted (Y Coordinates)")
+ax2[0].set_xlabel("Frame")
+ax2[0].set_ylabel("Y Coordinates")
+ax2[1].set_xlabel("Frame")
 ax2[1].legend()
+plt.show()
+
+# Plot x and y coordinates
+fig3, ax3 = plt.subplots(1,2)
+ax3[0].plot(train_pred.detach().numpy(), train_pred2.detach().numpy(),label='predicted')
+ax3[0].plot(train_set[:][1].view(-1), train_set2[:][1].view(-1),label='original')
+ax3[1].plot(test_pred.detach().numpy(), test_pred2.detach().numpy(),label='predicted')
+ax3[1].plot(test_set[:][1].view(-1), test_set2[:][1].view(-1),label='original')
+ax3[0].title.set_text("Training Set Path of Neuron (X and Y Coordinates)")
+ax3[1].title.set_text("Test Set Path of Neuron (X and Y Coordinates)")
+ax3[0].set_xlabel("X Coordinates")
+ax3[0].set_ylabel("Y Coordinates")
+ax3[1].set_xlabel("X Coordinates")
+ax3[0].legend()
+ax3[1].legend()
 plt.show()
 
 # EVALUATE MODEL
 # RMSE
 print("X coordinates")
 print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred.view(-1).detach().numpy(), train_set[:][1].view(-1).detach().numpy()))}")
-print(f"Train RMSE: {np.sqrt(mean_squared_error(test_pred.view(-1).detach().numpy(), test_set[:][1].view(-1).detach().numpy()))}")
+print(f"Test RMSE: {np.sqrt(mean_squared_error(test_pred.view(-1).detach().numpy(), test_set[:][1].view(-1).detach().numpy()))}")
+print(f"Train R^2: { model_selection.cross_val_score(model, train_set[:][0].view(-1,10,1), train_set[:][1].view(-1), cv=5).mean() }")
+print(f"Test R^2: { model_selection.cross_val_score(model, test_set[:][0].view(-1,10,1), test_set[:][1].view(-1), cv=5).mean() }")
+
 print("Y coordinates")
 print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred2.view(-1).detach().numpy(), train_set2[:][1].view(-1).detach().numpy()))}")
-print(f"Train RMSE: {np.sqrt(mean_squared_error(test_pred2.view(-1).detach().numpy(), test_set2[:][1].view(-1).detach().numpy()))}")
+print(f"Test RMSE: {np.sqrt(mean_squared_error(test_pred2.view(-1).detach().numpy(), test_set2[:][1].view(-1).detach().numpy()))}")
+print(f"Train R^2: { model_selection.cross_val_score(model2, train_set2[:][0].view(-1,10,1), train_set2[:][1].view(-1), cv=5).mean() }")
+print(f"Test R^2: { model_selection.cross_val_score(model2, test_set2[:][0].view(-1,10,1), test_set2[:][1].view(-1), cv=5).mean() }")

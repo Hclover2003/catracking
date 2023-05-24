@@ -3,7 +3,6 @@ import os
 import cv2
 import numpy as np;
 import pandas as pd
-import random, tqdm
 import seaborn as sns
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
@@ -80,6 +79,31 @@ class CaImagesDataset(Dataset):
     def __getitem__(self, idx):
         return [self.x[idx], self.y[idx]]
 
+def get_blobs_adaptive(img, bound_size, min_brightness_const, min_area):
+    im_gauss = cv2.GaussianBlur(img, (5, 5), 0) # "smoothing" the image with Gaussian Blur
+    thresh = cv2.adaptiveThreshold(im_gauss,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,bound_size,(min_brightness_const))
+    # Find contours
+    cont, hierarchy = cv2.findContours(thresh, 
+                            cv2.RETR_EXTERNAL, 
+                            cv2.CHAIN_APPROX_SIMPLE # only stores necessary points to define contour (avoids redundancy, saves memory)
+                            )
+    cont_filtered = []
+    for con in cont: 
+        area = cv2.contourArea(con) # calculate area, filter for contours above certain size
+        if area>min_area: # chosen by trial/error
+            cont_filtered.append(con)    
+    
+    # Draw + fill contours
+    new_img = np.full_like(img, 0) # image has black background
+    for c in cont_filtered:
+        cv2.drawContours(new_img, # image to draw on
+                        [c], # contours to draw
+                        -1, # contouridx: since negative, all contours are drawn
+                        255, # colour of contours: white
+                        -1 # thickness: since negative, fill in the shape
+                        )
+    return new_img, cont_filtered
+  
 def scale_data_scaler(data, opt):
   """Scales data with MinMaxScaler or StandardScaler
   data: list of data to scale
@@ -145,6 +169,67 @@ def get_features_and_outcome(num_prev, neuron_positions):
   df = pd.DataFrame(dict)
   return df
 
+def crop_img(img, posx, posy, crop_size):
+    return img[
+                    posy-crop_size:posy+crop_size, 
+                    posx-crop_size:posx+crop_size, 
+                    :]
+    
+def get_features_and_outcome_w_visual(num_prev, neuron_positions, img_dir, max_height, max_width):
+  """Returns dataframe with features and outcome variables
+  num_prev: number of previous frames to use as features
+  neuron_positions: list of neuron positions (x, y)
+  
+  Returns dataframe with features and outcome variables"""
+  i = 0 # index of current frame
+  features_x = []
+  features_y = []
+  features_x_colorhist = []
+  features_x_mean= []
+  features_x_meanstd = []
+  PURPLE = (69, 6, 90)
+  
+  # scale data (x or y position)
+  neuron_positions_x = [x for (x, y) in neuron_positions]
+  neuron_positions_y = [y for (x, y) in neuron_positions]
+    
+  # since we need 10 previous frames as features, make sure we stop in time
+  while i <= len(neuron_positions) - num_prev -1:
+    frame = i+num_prev
+    
+    # Get features from image
+    act_x, act_y = neuron_positions[frame]
+    img= cv2.imread(img_dir + str(frame) + ".png")
+    img = cv2.copyMakeBorder(img, 0, max_height-img.shape[0], 0, max_width-img.shape[1], borderType=cv2.BORDER_CONSTANT, value=PURPLE) # Add padding
+    cropped_img = crop_img(img, act_x, act_y, crop_size=12) # crop image around neuron
+    
+    # Get visual features from cropped image (neuron)
+    features_x_meanstd.append(np.concatenate(cv2.meanStdDev(cropped_img)).flatten()) # mean and std of each channel
+    features_x_mean.append(cv2.mean(cropped_img)[:3]) # mean of each channel
+    features_x_colorhist.append(cv2.calcHist([cropped_img],[0,1,2],None,[8,8,8],[0,256,0,256,0,256]).flatten()) # color histogram
+    
+    # Get features from neuron positions
+    features_x.append(neuron_positions_x[i:frame])
+    features_y.append(neuron_positions_y[i:frame])
+    
+    i+=1
+
+  # Make dataframe with features and outcome variables
+  dict = {'prev_n_x': features_x, 'curr_x': neuron_positions_x[num_prev:], 
+          'prev_n_y': features_y, 'curr_y': neuron_positions_y[num_prev:], 
+          'channel_means': features_x_mean, 'channel_means_std': features_x_meanstd, 'color_hist': features_x_colorhist
+          } 
+
+  # Normalize features
+  scaler = MinMaxScaler()
+  df = pd.DataFrame(dict)
+  df = pd.DataFrame(scaler.fit_transform(df),
+                   columns=['prev_n_x', 'curr_x', 'prev_n_y', 'curr_y', 'channel_means', 'channel_means_std', 'color_hist'])
+  
+  df['curr_frame']= [j for j in range(num_prev, len(neuron_positions))]
+  
+  return df, scaler
+
 def find_centroids(segmented_img):
   """Returns list of centroids of segmented image
   segmented_img: segmented image (binary)
@@ -184,12 +269,12 @@ def get_closest_cent(centroids:List, pred:Tuple):
         coords = (pot_x, pot_y)
     return coords
 
-def get_norm_width_height(videos, imgs_dct, positions_dct):
+def get_norm_width_height(video_dir, position_dir, videos, imgs_dct, positions_dct):
   width, height = 0, 0 
   for video in videos:
       # Save imgs and positions in dictionary
-      imgs_dct[video] = np.load(f"./data/imgs/{video}_crop.nd2.npy")
-      positions_dct[video] = np.load(f"./data/positions/AVA_{video}.mat.npy")
+      imgs_dct[video] = np.load(f"{video_dir}/{video}_crop.nd2.npy")
+      positions_dct[video] = np.load(f"{position_dir}/AVA_{video}.mat.npy")
       print(f"Loaded {video}")
       h, w = imgs_dct[video].shape[2:]
       if h > height:
@@ -203,7 +288,7 @@ def get_norm_width_height(videos, imgs_dct, positions_dct):
 videos = ['11409', "11410", '11411', '11413', '11414', '11415']
 imgs_dct = {}
 positions_dct={}
-width, height = get_norm_width_height(videos, imgs_dct, positions_dct) # Get max height and width between all videos (for scaling)
+width, height = get_norm_width_height( "/Users/huayinluo/Desktop/code/CaTracking/data/imgs", "/Users/huayinluo/Desktop/code/CaTracking/data/positions", videos, imgs_dct, positions_dct) # Get max height and width between all videos (for scaling)
 print(f"Max width: {width} | Max height: {height}")
 print(f"Finished loading images and positions: {len(imgs_dct)} images, {len(positions_dct)} positions")
 
@@ -231,7 +316,7 @@ if False:
 df_train_lst = []
 df_test_lst=[]
 for ava in positions_dct.values():
-    video_df= get_features_and_outcome(10, ava)
+    video_df= get_features_and_outcome_w_visual(10, ava, "/Users/huayinluo/Desktop/code/CaTracking/original", height, width) # Get features and outcome variables for each video
     split = math.floor(len(video_df)*0.8)
     df_train_lst.append(video_df[:split]) # Get features and outcome variables for each video
     df_test_lst.append(video_df[split:]) # Get features and outcome variables for each video
@@ -414,6 +499,5 @@ print(f"Test R^2: { model_selection.cross_val_score(model, test_set[:][0].view(-
 
 print("Y coordinates")
 print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred2.view(-1).detach().numpy(), train_set2[:][1].view(-1).detach().numpy()))}")
-print(f"Test RMSE: {np.sqrt(mean_squared_error(test_pred2.view(-1).detach().numpy(), test_set2[:][1].view(-1).detach().numpy()))}")
-print(f"Train R^2: { model_selection.cross_val_score(model2, train_set2[:][0].view(-1,10,1), train_set2[:][1].view(-1), cv=5).mean() }")
-print(f"Test R^2: { model_selection.cross_val_score(model2, test_set2[:][0].view(-1,10,1), test_set2[:][1].view(-1), cv=5).mean() }")
+print(f"Train RMSE: {np.sqrt(mean_squared_error(test_pred2.view(-1).detach().numpy(), test_set2[:][1].view(-1).detach().numpy()))}")
+

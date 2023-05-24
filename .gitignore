@@ -1,4 +1,8 @@
 data/
 images/
 results/
+unet_data/
+results/
+.DS_Store
+.gitignore
 .venv

@@ -39,6 +39,7 @@ from torch.nn.init import kaiming_uniform_
 from torch.nn.init import xavier_uniform_
 import joblib
 import time
+import pickle
 
 class neural_network(nn.Module):
     """Neural network with LSTM layer and fully connected layer"""
@@ -73,6 +74,7 @@ class CaImagesDataset(Dataset):
     def __getitem__(self, idx):
         return [self.x[idx], self.y[idx]]
 
+# Segment image (TODO: replace with unet)
 def get_blobs_adaptive(img, bound_size, min_brightness_const, min_area):
     im_gauss = cv2.GaussianBlur(img, (5, 5), 0) # "smoothing" the image with Gaussian Blur
     thresh = cv2.adaptiveThreshold(im_gauss,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,bound_size,(min_brightness_const))
@@ -120,7 +122,10 @@ def scale_data(data, full:int):
   full: image dimension (height or width)
   
   Returns scaled data"""
-  norm_data = [i/full for i in data]
+  try:
+     norm_data = [i/full for i in data]
+  except:
+      norm_data = data/full
   return norm_data
 
 def unscale_data(data, full:int):
@@ -135,6 +140,7 @@ def unscale_data(data, full:int):
       norm_data = data*full
   return np.array(norm_data)
 
+# get features and outcome variables
 def get_features_and_outcome(num_prev, neuron_positions):
   """Returns dataframe with features and outcome variables
   num_prev: number of previous frames to use as features
@@ -163,6 +169,7 @@ def get_features_and_outcome(num_prev, neuron_positions):
   df = pd.DataFrame(dict)
   return df
 
+# crop image to get image features
 def crop_img(img, posx, posy, crop_size):
     return img[
                     posy-crop_size:posy+crop_size, 
@@ -224,6 +231,7 @@ def get_features_and_outcome_w_visual(num_prev, neuron_positions, img_dir, max_h
   
   return df, scaler
 
+# find centroids of segmented image & get scores
 def find_centroids(segmented_img):
   """Returns list of centroids of segmented image
   segmented_img: segmented image (binary)
@@ -253,16 +261,18 @@ def get_closest_cent(centroids:List, pred:Tuple):
     pred: predicted coordinates"""
     max_score = 10**1000
     predx, predy = pred
+    cent_scores = {}
     coords = (0,0) # Closest to predicted coords
 
     for (pot_x, pot_y) in centroids:
         score = get_dist_score(predx, predy, pot_x, pot_y)
-        print(f"Centroid: {pot_x}, {pot_y} | Score: {round(score)}")
+        cent_scores[(pot_x, pot_y)] = score
         if score <= max_score:
             max_score = score
         coords = (pot_x, pot_y)
-    return coords
+    return coords, cent_scores
 
+# get width, height coordinates to use for normalization
 def get_norm_width_height(video_dir, position_dir, videos, imgs_dct, positions_dct):
   width, height = 0, 0 
   for video in videos:
@@ -277,7 +287,8 @@ def get_norm_width_height(video_dir, position_dir, videos, imgs_dct, positions_d
           width = w
   return width, height
 
-def pred_video(n_input, video, model, model2, width, height):
+# predict coordinates for a video
+def pred_video(n_input, video, model, model2, width, height, file_name):
     """
     Predicts coordinates for a video
     
@@ -308,12 +319,14 @@ def pred_video(n_input, video, model, model2, width, height):
 
 
     # Dictionaries for plotting
-    centroid_dct = {} # key: frame, value: list of centroids
-    pred_dct = {} # key: frame, value: (predx, predy)
-    chosen_dct = {} # key: frame, value: selected (x, y) coordinates
-    streak_dct = {} # dictionary of streaks (key: frame, value: streak count)
+    centroid_lst = [] # key: frame, value: list of centroids
+    pred_lst = [] # key: frame, value: (predx, predy)
+    chosen_lst = [] # key: frame, value: selected (x, y) coordinates
+    streak_lst = [] # dictionary of streaks (key: frame, value: streak count)
+    act_lst = [] # key: frame, value: (actx, acty)
     streak_count = 0
     frame_reset_lst = [] # dictionary of frames to reset at (key: frame, value: predicted (x, y) coordinates)
+    f = open(file_name, "a")
 
     # i=0 corresponds to frame 10
     # in total, there are 2570 frames. We are predicting frames 10 to 2570, which means we use i=0 to i=2560
@@ -325,65 +338,92 @@ def pred_video(n_input, video, model, model2, width, height):
         x_init = torch.from_numpy(np.float32(np.expand_dims(inputx[i:frame].reshape(-1, 1), 0))) # we take previous 10 frames as features
         y_init = torch.from_numpy(np.float32(np.expand_dims(inputy[i:frame].reshape(-1, 1), 0))) # this is scaled
         
-        # predicted coordinates
+        # predicted & actual coordinates
         predx = unscale_data(model(x_init).detach().numpy()[0][0], full=width) # this is unscaled
         predy = unscale_data(model2(y_init).detach().numpy()[0][0], full=height)
-        pred_dct[frame]=(predx, predy)
+        pred_lst.append((predx, predy))
 
-        # actual coordinates
         actx, acty = ava[frame] # actual coordinates for this frame
 
         # Get list of centroids
         ground_truth_dir=rf'C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\ground_truth\{video}'
         mask = cv2.imread(f"{ground_truth_dir}/{frame}.png", cv2.IMREAD_GRAYSCALE)
         centroids = find_centroids(mask)  # list of potential centroids
-        centroid_dct[frame] = centroids
+        centroid_lst.append(centroids)
 
         # Find closest centroid
-        coords = get_closest_cent(centroids, (predx, predy)) # this is unscaled
-        act_coords = get_closest_cent(centroids, (actx, acty))
+        coords, cent_scores = get_closest_cent(centroids, (predx, predy)) # this is unscaled
+        act_coords, cent_scores_act= get_closest_cent(centroids, (actx, acty))
+        f.write(f"Frame {i} \n")
+        f.write(f"Pred: {predx}, {predy} \n")
+        f.write(f"Actual: {actx}, {acty} \n")
+
+        for cent in centroid_lst[i]:
+          if cent == chosen_lst[i]:
+            f.write(f" (Chosen) \n")
+          if cent == act_lst[i]:
+            f.write(f"(Actual) \n")
+          f.write(f"Centroid: {cent} | Pred Score: {cent_scores[i]} | Act Score: {cent_scores_act[i]} \n")
+        f.write("\n")
+        print(f"Wrote frame {i}")
 
         # prediction is correct if closest centroid to predicted coords is the same as closest centroid to actual coords
         if (coords[0] == act_coords[0]):
-            print("Correct")
+            print(f"Frame {frame} Correct \n")
+            f.write(f"Frame {frame} Correct \n")
             inputx = np.append(inputx, scale_data(np.array(coords[0]).reshape(-1, 1)[0][0], width)) 
             inputy = np.append(inputy,  scale_data(np.array(coords[1]).reshape(-1, 1)[0][0], height))
             num_correct +=1
             streak_count+=1
         else:
-            print("False")
-
-            inputx = np.append(inputx, scale_data(np.array(act_coords[0]).reshape(-1, 1), width)) 
-            inputy = np.append(inputy, scale_data(np.array(act_coords[1]).reshape(-1, 1), height))
+            print(f"Frame {frame} False \n")
+            f.write(f"Frame {frame} False \n")
+            print(f"{act_coords[0]}, {act_coords[1]}")
+            inputx = np.append(inputx, scale_data(np.array(act_coords[0]).reshape(-1, 1)[0][0], width)) 
+            inputy = np.append(inputy, scale_data(np.array(act_coords[1]).reshape(-1, 1)[0][0], height))
             num_wrong +=1
             frame_reset_lst.append(frame)
-            streak_dct[frame]=streak_count
+            streak_lst.append(streak_count)
             streak_count=0
 
-        chosen_dct[frame] = (coords[0], coords[1])
+        chosen_lst.append((coords[0], coords[1]))
+        act_lst.append((act_coords[0], act_coords[1]))
     print(f"{num_correct}, {num_wrong}")
     print("\n")
     print(f"Time: {time.time() -start_time}")
-    return pred_dct, chosen_dct, centroid_dct, streak_dct, frame_reset_lst
+    f.write(f"{num_correct}, {num_wrong}")
+    f.close()
+    return pred_lst, chosen_lst, act_lst, centroid_lst, streak_lst, frame_reset_lst
 
-#SET CONSTANTS
-video_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data\imgs"
-position_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data\positions"
+LOAD = False
+VISUALIZE = False
 
-videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415']
-imgs_dct = {}
-positions_dct={}
-width, height = get_norm_width_height(video_dir, position_dir, imgs_dct, positions_dct) # Get max height and width between all videos (for scaling)
-print(f"Max width: {width} | Max height: {height}")
-print(f"Finished loading images and positions: {len(imgs_dct)} images, {len(positions_dct)} positions")
+video = "11408"
 
-model = joblib.load(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\model2.pkl")
-model2 = joblib.load(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\ymodel3.pkl")
+if LOAD:
+  #SET CONSTANTS
+  video_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data\imgs"
+  position_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data\positions"
 
-pred_dct, chosen_dct, centroid_dct, streak_dct, frame_reset_lst = pred_video(n_input=10, video="11408", model=model, model2=model2, width=width, height=height)
+  videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415']
+  imgs_dct = {}
+  positions_dct={}
+  width, height = get_norm_width_height(video_dir, position_dir, videos, imgs_dct, positions_dct) # Get max height and width between all videos (for scaling)
+  print(f"Max width: {width} | Max height: {height}")
+  print(f"Finished loading images and positions: {len(imgs_dct)} images, {len(positions_dct)} positions")
 
-plt.plot([x for (x,y) in pred_dct.values()], [y for (x,y) in pred_dct.values()], label="pred", alpha=0.5)
-plt.plot([x for (x,y) in chosen_dct.values()], [y for (x,y) in chosen_dct.values()], label="chosen", alpha=0.5)
-plt.plot([x for (x,y) in positions_dct['11408']], [y for (x,y) in positions_dct['11408']], label="actual", alpha=0.5)
-plt.plot([chosen_dct[i][0] for i in frame_reset_lst], [chosen_dct[i][1] for i in frame_reset_lst], 'ro', label="reset")
-plt.legend()
+  model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\lstm"
+  model = joblib.load(f'{model_dir}\model{1}.pkl')
+  model2 = joblib.load(f'{model_dir}\ymodel{3}.pkl')
+
+
+
+if VISUALIZE:
+  print(len(pred_lst), pred_lst[:2])
+  plt.plot([x for (x,y) in pred_lst], [y for (x,y) in pred_lst], label="pred", alpha=0.5)
+  plt.plot([x for (x,y) in chosen_lst], [y for (x,y) in chosen_lst], label="chosen", alpha=0.5)
+  plt.plot([x for (x,y) in act_lst], [y for (x,y) in act_lst], label="actual", alpha=0.5)
+  plt.plot([x for (x,y) in positions_dct[video]], [y for (x,y) in positions_dct[video]], label="labelled AVA", alpha=0.5)
+  plt.plot([chosen_lst[i][0] for i in frame_reset_lst], [chosen_lst[i][1] for i in frame_reset_lst], 'ro', label="reset")
+  plt.legend()
+  plt.show()

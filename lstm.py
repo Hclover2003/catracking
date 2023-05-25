@@ -169,13 +169,35 @@ def get_features_and_outcome(num_prev, neuron_positions):
   df = pd.DataFrame(dict)
   return df
 
-def crop_img(img, posx, posy, crop_size):
-    return img[
-                    posy-crop_size:posy+crop_size, 
-                    posx-crop_size:posx+crop_size, 
-                    :]
-    
-def get_features_and_outcome_w_visual(num_prev, neuron_positions, img_dir, max_height, max_width):
+def get_norm_df(df, lst_cols:List, non_lst_cols: List):
+  """Normalize dataframe values, even when some columns have elements that are lists
+
+  df: dataframe to normalize
+  lst_cols: list of columns where element dtype is list, not number
+  non_lst_cols: list of columns where element dtype is number
+  
+  Returns dataframe with normalized columns"""
+  df_expanded = df.copy()
+  df_final = df.copy()
+  for col in lst_cols:
+      n = len(df_expanded[col][0])
+      print(col, n)
+      labels = [f"{col}_{i}" for i in range(n)]
+      df_expanded[labels] = pd.DataFrame(df_expanded[col].tolist())
+      df_expanded = df_expanded.drop(col, axis=1)
+  
+  scaler = MinMaxScaler()
+  df_norm = pd.DataFrame(scaler.fit_transform(df_expanded),
+                    columns=df_expanded.columns)
+  
+  for col_name in lst_cols:
+      sub_cols = [col for col in df_norm.columns if col_name in col]
+      df_final[col_name] = df_norm[sub_cols].values.tolist()
+  df_final[non_lst_cols] = df_norm[non_lst_cols]
+
+  return df_final
+
+def get_features_and_outcome_w_visual(num_prev, max_height, max_width, neuron_positions, img_dir):
   """Returns dataframe with features and outcome variables
   num_prev: number of previous frames to use as features
   neuron_positions: list of neuron positions (x, y)
@@ -198,10 +220,16 @@ def get_features_and_outcome_w_visual(num_prev, neuron_positions, img_dir, max_h
     frame = i+num_prev
     
     # Get features from image
-    act_x, act_y = neuron_positions[frame]
-    img= cv2.imread(img_dir + str(frame) + ".png")
+    actx, acty = neuron_positions[frame]
+    actx, acty = round(actx), round(acty)
+    img_path = f"{img_dir}\{frame}.png"
+    print(img_path)
+    img= cv2.imread(img_path)
     img = cv2.copyMakeBorder(img, 0, max_height-img.shape[0], 0, max_width-img.shape[1], borderType=cv2.BORDER_CONSTANT, value=PURPLE) # Add padding
-    cropped_img = crop_img(img, act_x, act_y, crop_size=12) # crop image around neuron
+    crop_size=12
+
+    
+    cropped_img =  img[(acty)-crop_size:acty+crop_size, actx-crop_size:actx+crop_size, :]
     
     # Get visual features from cropped image (neuron)
     features_x_meanstd.append(np.concatenate(cv2.meanStdDev(cropped_img)).flatten()) # mean and std of each channel
@@ -217,18 +245,17 @@ def get_features_and_outcome_w_visual(num_prev, neuron_positions, img_dir, max_h
   # Make dataframe with features and outcome variables
   dict = {'prev_n_x': features_x, 'curr_x': neuron_positions_x[num_prev:], 
           'prev_n_y': features_y, 'curr_y': neuron_positions_y[num_prev:], 
-          'channel_means': features_x_mean, 'channel_means_std': features_x_meanstd, 'color_hist': features_x_colorhist
+          'channel_means': features_x_mean, 'channel_std': features_x_meanstd
           } 
 
   # Normalize features
   scaler = MinMaxScaler()
   df = pd.DataFrame(dict)
-  df = pd.DataFrame(scaler.fit_transform(df),
-                   columns=['prev_n_x', 'curr_x', 'prev_n_y', 'curr_y', 'channel_means', 'channel_means_std', 'color_hist'])
+  df_final = get_norm_df(df, ['prev_n_x', 'prev_n_y', 'channel_means', 'channel_std'], ['curr_x', 'curr_y'])
   
-  df['curr_frame']= [j for j in range(num_prev, len(neuron_positions))]
+  df_final['curr_frame']= [j for j in range(num_prev, len(neuron_positions))]
   
-  return df, scaler
+  return df_final, scaler
 
 def find_centroids(segmented_img):
   """Returns list of centroids of segmented image
@@ -273,8 +300,8 @@ def get_norm_width_height(video_dir, position_dir, videos, imgs_dct, positions_d
   width, height = 0, 0 
   for video in videos:
       # Save imgs and positions in dictionary
-      imgs_dct[video] = np.load(f"{video_dir}/{video}_crop.nd2.npy")
-      positions_dct[video] = np.load(f"{position_dir}/AVA_{video}.mat.npy")
+      imgs_dct[video] = np.load(rf"{video_dir}\{video}_crop.nd2.npy")
+      positions_dct[video] = np.load(rf"{position_dir}\AVA_{video}.mat.npy")
       print(f"Loaded {video}")
       h, w = imgs_dct[video].shape[2:]
       if h > height:
@@ -284,11 +311,12 @@ def get_norm_width_height(video_dir, position_dir, videos, imgs_dct, positions_d
   return width, height
 
 # SET CONSTANTS
+data_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data"
 
 videos = ['11409', "11410", '11411', '11413', '11414', '11415']
 imgs_dct = {}
 positions_dct={}
-width, height = get_norm_width_height( "/Users/huayinluo/Desktop/code/CaTracking/data/imgs", "/Users/huayinluo/Desktop/code/CaTracking/data/positions", videos, imgs_dct, positions_dct) # Get max height and width between all videos (for scaling)
+width, height = get_norm_width_height( rf"{data_dir}\imgs", rf"{data_dir}\positions", videos, imgs_dct, positions_dct) # Get max height and width between all videos (for scaling)
 print(f"Max width: {width} | Max height: {height}")
 print(f"Finished loading images and positions: {len(imgs_dct)} images, {len(positions_dct)} positions")
 
@@ -315,11 +343,15 @@ if False:
 # Train-test split
 df_train_lst = []
 df_test_lst=[]
-for ava in positions_dct.values():
-    video_df= get_features_and_outcome_w_visual(10, ava, "/Users/huayinluo/Desktop/code/CaTracking/original", height, width) # Get features and outcome variables for each video
+for video in videos:
+    print(f"video {video} ...")
+    positions = positions_dct[video]
+    img_dir =rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original\{video}"
+    video_df= get_features_and_outcome_w_visual(10, max_height=height, max_width=width, img_dir=img_dir, neuron_positions=positions) # Get features and outcome variables for each video
     split = math.floor(len(video_df)*0.8)
     df_train_lst.append(video_df[:split]) # Get features and outcome variables for each video
     df_test_lst.append(video_df[split:]) # Get features and outcome variables for each video
+print("Loaded data")
 df_train = pd.concat(df_train_lst)
 df_test = pd.concat(df_test_lst)
 
@@ -332,7 +364,7 @@ x_train2 = np.array(df_train.prev_n_y.tolist())
 x_test2 = np.array(df_test.prev_n_y.tolist())
 y_train2 = np.array(df_train.curr_y.tolist())
 y_test2 = np.array(df_test.curr_y.tolist())
-
+print("Finished test-train split")
 # Create dataset and dataloader
 train_set = CaImagesDataset(x_train,y_train)
 train_loader = DataLoader(train_set,
@@ -356,9 +388,9 @@ load=False
 load_num = 2 # for saving/loading model x
 save_num = 1
 
-train2 = False # True if training y model, False if loading model
+train2 = True # True if training y model, False if loading model
 load2=False
-load_num2 = 4 # for saving/loading model y
+load_num2 = 3 # for saving/loading model y
 save_num2=4
 # Get X model
 if train:
@@ -495,8 +527,8 @@ plt.show()
 print("X coordinates")
 print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred.view(-1).detach().numpy(), train_set[:][1].view(-1).detach().numpy()))}")
 print(f"Test RMSE: {np.sqrt(mean_squared_error(test_pred.view(-1).detach().numpy(), test_set[:][1].view(-1).detach().numpy()))}")
-print(f"Train R^2: { model_selection.cross_val_score(model, train_set[:][0].view(-1,10,1), train_set[:][1].view(-1), cv=5).mean() }")
-print(f"Test R^2: { model_selection.cross_val_score(model, test_set[:][0].view(-1,10,1), test_set[:][1].view(-1), cv=5).mean() }")
+# print(f"Train R^2: { model_selection.cross_val_score(model, train_set[:][0].view(-1,10,1), train_set[:][1].view(-1), cv=5).mean() }")
+# print(f"Test R^2: { model_selection.cross_val_score(model, test_set[:][0].view(-1,10,1), test_set[:][1].view(-1), cv=5).mean() }")
 
 print("Y coordinates")
 print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred2.view(-1).detach().numpy(), train_set2[:][1].view(-1).detach().numpy()))}")

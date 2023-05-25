@@ -78,7 +78,7 @@ if __name__ == '__main__':
             model = UNet()
 
         print("Starting training...")
-        EPOCHS = 2
+        EPOCHS = 1
         DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         loss = smp.utils.losses.DiceLoss()
         metrics = [
@@ -115,11 +115,11 @@ if __name__ == '__main__':
             valid_logs = valid_epoch.run(valid_loader)
             train_logs_list.append(train_logs)
             valid_logs_list.append(valid_logs)
-            
+        
+            joblib.dump(model, f'{model_folder}/model{save_num}.pkl')
     else:
         model = joblib.load(f'{model_folder}/model{load_num}.pkl')
 
-    joblib.dump(model, f'{model_folder}/model{save_num}.pkl')
 
     ## Using Model to Perform Segmentation on Test Data
     # create test dataloader to be used with UNet model (with preprocessing operation: to_tensor(...))

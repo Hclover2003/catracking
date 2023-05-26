@@ -287,6 +287,14 @@ def get_norm_width_height(video_dir, position_dir, videos, imgs_dct, positions_d
           width = w
   return width, height
 
+def save_data(file, file_name):
+   pickle.dump(file, open(f"{file_name}.pkl", "wb"))
+
+def load_data(file_name):
+  lst = pickle.load(open(f"{file_name}.pkl", "rb"))
+  print(f"Loaded {file_name}")
+  return lst
+
 # predict coordinates for a video
 def pred_video(n_input, video, model, model2, width, height, file_name):
     """
@@ -326,7 +334,7 @@ def pred_video(n_input, video, model, model2, width, height, file_name):
     act_lst = [] # key: frame, value: (actx, acty)
     streak_count = 0
     frame_reset_lst = [] # dictionary of frames to reset at (key: frame, value: predicted (x, y) coordinates)
-    f = open(file_name, "a")
+    f = open(file_name, "w")
 
     # i=0 corresponds to frame 10
     # in total, there are 2570 frames. We are predicting frames 10 to 2570, which means we use i=0 to i=2560
@@ -358,45 +366,54 @@ def pred_video(n_input, video, model, model2, width, height, file_name):
         f.write(f"Pred: {predx}, {predy} \n")
         f.write(f"Actual: {actx}, {acty} \n")
 
-        for cent in centroid_lst[i]:
+        # prediction is correct if closest centroid to predicted coords is the same as closest centroid to actual coords
+        if (coords[0] == act_coords[0]):
+          print(f"Frame {frame} Correct \n")
+          f.write(f"Frame {frame} Correct \n")
+          inputx = np.append(inputx, scale_data(np.array(coords[0]).reshape(-1, 1)[0][0], width)) 
+          inputy = np.append(inputy,  scale_data(np.array(coords[1]).reshape(-1, 1)[0][0], height))
+          num_correct +=1
+          streak_count+=1
+        else:
+          print(f"Frame {frame} False \n")
+          f.write(f"Frame {frame} False \n")
+          print(f"{act_coords[0]}, {act_coords[1]}")
+          inputx = np.append(inputx, scale_data(np.array(act_coords[0]).reshape(-1, 1)[0][0], width)) 
+          inputy = np.append(inputy, scale_data(np.array(act_coords[1]).reshape(-1, 1)[0][0], height))
+          num_wrong +=1
+          frame_reset_lst.append(frame)
+          streak_lst.append(streak_count)
+          streak_count=0
+
+        chosen_lst.append((coords[0], coords[1]))
+        act_lst.append((act_coords[0], act_coords[1]))
+
+        for j in range(len(centroid_lst[i])):
+          cent = centroid_lst[i][j]
           if cent == chosen_lst[i]:
             f.write(f" (Chosen) \n")
           if cent == act_lst[i]:
             f.write(f"(Actual) \n")
-          f.write(f"Centroid: {cent} | Pred Score: {cent_scores[i]} | Act Score: {cent_scores_act[i]} \n")
+          f.write(f"Centroid: {cent} | Pred Score: {cent_scores[cent]} | Act Score: {cent_scores_act[cent]} \n")
         f.write("\n")
         print(f"Wrote frame {i}")
 
-        # prediction is correct if closest centroid to predicted coords is the same as closest centroid to actual coords
-        if (coords[0] == act_coords[0]):
-            print(f"Frame {frame} Correct \n")
-            f.write(f"Frame {frame} Correct \n")
-            inputx = np.append(inputx, scale_data(np.array(coords[0]).reshape(-1, 1)[0][0], width)) 
-            inputy = np.append(inputy,  scale_data(np.array(coords[1]).reshape(-1, 1)[0][0], height))
-            num_correct +=1
-            streak_count+=1
-        else:
-            print(f"Frame {frame} False \n")
-            f.write(f"Frame {frame} False \n")
-            print(f"{act_coords[0]}, {act_coords[1]}")
-            inputx = np.append(inputx, scale_data(np.array(act_coords[0]).reshape(-1, 1)[0][0], width)) 
-            inputy = np.append(inputy, scale_data(np.array(act_coords[1]).reshape(-1, 1)[0][0], height))
-            num_wrong +=1
-            frame_reset_lst.append(frame)
-            streak_lst.append(streak_count)
-            streak_count=0
-
-        chosen_lst.append((coords[0], coords[1]))
-        act_lst.append((act_coords[0], act_coords[1]))
     print(f"{num_correct}, {num_wrong}")
     print("\n")
     print(f"Time: {time.time() -start_time}")
     f.write(f"{num_correct}, {num_wrong}")
     f.close()
+    save_data(pred_lst, f"pred_lst_{file_name}")
+    save_data(chosen_lst, f"chosen_lst_{file_name}")
+    save_data(act_lst, f"act_lst_{file_name}")
+    save_data(centroid_lst, f"centroid_lst_{file_name}")
+    save_data(streak_lst, f"streak_lst_{file_name}")
+    save_data(frame_reset_lst, f"frame_reset_lst_{file_name}")
     return pred_lst, chosen_lst, act_lst, centroid_lst, streak_lst, frame_reset_lst
 
 LOAD = False
-VISUALIZE = False
+RUN = False
+VISUALIZE = True
 
 video = "11408"
 
@@ -412,18 +429,38 @@ if LOAD:
   print(f"Max width: {width} | Max height: {height}")
   print(f"Finished loading images and positions: {len(imgs_dct)} images, {len(positions_dct)} positions")
 
+if RUN:
+
   model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\lstm"
-  model = joblib.load(f'{model_dir}\model{1}.pkl')
+  model1 = joblib.load(f'{model_dir}\model{1}.pkl')
   model2 = joblib.load(f'{model_dir}\ymodel{3}.pkl')
 
 
+  # Predict video
+  pred_lst, chosen_lst, act_lst, centroid_lst, streak_lst, frame_reset_lst = pred_video(n_input=10, video=video, model= model1, model2=model2, width=width, height=height, file_name=f"lstm_{video}.txt")
+
 
 if VISUALIZE:
-  print(len(pred_lst), pred_lst[:2])
-  plt.plot([x for (x,y) in pred_lst], [y for (x,y) in pred_lst], label="pred", alpha=0.5)
-  plt.plot([x for (x,y) in chosen_lst], [y for (x,y) in chosen_lst], label="chosen", alpha=0.5)
-  plt.plot([x for (x,y) in act_lst], [y for (x,y) in act_lst], label="actual", alpha=0.5)
-  plt.plot([x for (x,y) in positions_dct[video]], [y for (x,y) in positions_dct[video]], label="labelled AVA", alpha=0.5)
-  plt.plot([chosen_lst[i][0] for i in frame_reset_lst], [chosen_lst[i][1] for i in frame_reset_lst], 'ro', label="reset")
-  plt.legend()
-  plt.show()
+  pred_lst = load_data("pred_lst_lstm_11408.txt")
+  chosen_lst = load_data("chosen_lst_lstm_11408.txt")
+  act_lst = load_data("act_lst_lstm_11408.txt")
+  centroid_lst = load_data("centroid_lst_lstm_11408.txt")
+  streak_lst = load_data("streak_lst_lstm_11408.txt")
+  frame_reset_lst = load_data("frame_reset_lst_lstm_11408.txt")
+
+  for frame in range(2):
+    img = cv2.cvtColor(cv2.imread(f"C:\\Users\\hozhang\\Desktop\\CaTracking\\huayin_unet_lstm\\images\\original\\{video}\\{frame+10}.png"), cv2.COLOR_BGR2RGB)
+    pred_pt = pred_lst[frame]
+    act_pt = act_lst[frame]
+    chosen_pt = chosen_lst[frame]
+    print(f"Frame {frame} | Pred: {pred_pt} | Act: {act_pt} | Chosen: {chosen_pt}")
+
+    plt.imshow(img)
+    plt.title(f"Frame {frame}")
+    plt.plot(pred_pt[0], pred_pt[1], 'ro', label="Predicted" , alpha=0.5, markersize=2)
+    plt.plot(act_pt[0], act_pt[1], 'go', label="Actual", alpha=0.7, markersize=2)
+    plt.plot(chosen_pt[0], chosen_pt[1], 'yo', label="Chosen", alpha=0.7, markersize=2)
+    for cent in centroid_lst[frame]:
+      plt.plot(cent[0], cent[1], 'ko', label="Centroid", alpha=0.3, markersize=2)
+    plt.legend()
+    plt.show()

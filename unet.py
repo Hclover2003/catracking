@@ -68,6 +68,8 @@ if __name__ == '__main__':
     TRAINING = True # True if training, False if testing
     load_num = 1
     save_num = 1
+    target_width = 454 # change to max width of images in dataset (make sure dividable by 2)
+    target_height = 546 # change to max height of images in dataset
 
     model_folder = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet"
 
@@ -154,7 +156,7 @@ if __name__ == '__main__':
     # for idx in range(len(test_dataset)):
     random_idx = random.randint(0, len(test_dataset)-1)
     image, gt_mask = test_dataset[random_idx] # image and ground truth from test dataset
-    image_vis = crop_image(np.transpose(test_dataset[random_idx][0].astype('uint8'), (1, 2, 0)))
+    image_vis = crop_image(np.transpose(test_dataset[random_idx][0].astype('uint8'), (1, 2, 0)), (target_height, target_width, 3)) # image for visualization
     x_tensor = torch.from_numpy(image).to(DEVICE).unsqueeze(0)
 
     # Predict test image
@@ -164,10 +166,10 @@ if __name__ == '__main__':
     pred_mask = np.transpose(pred_mask,(1,2,0))
     # Get prediction channel corresponding to calcium
     pred_calcium_heatmap = pred_mask[:,:,class_names.index('calcium')]
-    pred_mask = crop_image(colour_code_segmentation(reverse_one_hot(pred_mask), class_rgb_values))
+    pred_mask = crop_image(colour_code_segmentation(reverse_one_hot(pred_mask), class_rgb_values), (target_height, target_width, 3))
     # Convert gt_mask from `CHW` format to `HWC` format
     gt_mask = np.transpose(gt_mask,(1,2,0))
-    gt_mask = crop_image(colour_code_segmentation(reverse_one_hot(gt_mask), class_rgb_values))
+    gt_mask = crop_image(colour_code_segmentation(reverse_one_hot(gt_mask), class_rgb_values), (target_height, target_width, 3))
 
     cv2.imwrite(
         os.path.join(sample_preds_folder, f"sample_pred_{i}.png"), 

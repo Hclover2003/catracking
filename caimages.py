@@ -22,6 +22,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from torch.utils.data import DataLoader
 import segmentation_models_pytorch.utils.metrics
+
 class CaImagesDataset(torch.utils.data.Dataset):
 
     """Calcium imaging images dataset. Read images, apply augmentation and preprocessing transformations.
@@ -79,7 +80,9 @@ class CaImagesDataset(torch.utils.data.Dataset):
         return len(self.image_paths)
 
 
+
 class DoubleConv(nn.Module):
+    """(Conv2d -> BN -> ReLU) * 2"""
     def __init__(self, in_channels, out_channels):
         super(DoubleConv, self).__init__()
         self.double_conv = nn.Sequential(
@@ -95,6 +98,7 @@ class DoubleConv(nn.Module):
         return self.double_conv(x)
     
 class DownBlock(nn.Module):
+    """Double Convolution followed by Max Pooling"""
     def __init__(self, in_channels, out_channels):
         super(DownBlock, self).__init__()
         self.double_conv = DoubleConv(in_channels, out_channels)
@@ -106,6 +110,7 @@ class DownBlock(nn.Module):
         return (down_out, skip_out)
 
 class UpBlock(nn.Module):
+    """Up Convolution (Upsampling followed by Double Convolution)"""
     def __init__(self, in_channels, out_channels, up_sample_mode):
         super(UpBlock, self).__init__()
         if up_sample_mode == 'conv_transpose':
@@ -128,19 +133,19 @@ class UNet(nn.Module):
         super(UNet, self).__init__()
         self.up_sample_mode = up_sample_mode
         # Downsampling Path
-        self.down_conv1 = DownBlock(3, 64)
-        self.down_conv2 = DownBlock(64, 128)
-        self.down_conv3 = DownBlock(128, 256)
-        self.down_conv4 = DownBlock(256, 512)
+        self.down_conv1 = DownBlock(3, 64) # 3 input channels --> 64 output channels
+        self.down_conv2 = DownBlock(64, 128) # 64 input channels --> 128 output channels
+        self.down_conv3 = DownBlock(128, 256) # 128 input channels --> 256 output channels
+        self.down_conv4 = DownBlock(256, 512) # 256 input channels --> 512 output channels
         # Bottleneck
         self.double_conv = DoubleConv(512, 1024)
         # Upsampling Path
-        self.up_conv4 = UpBlock(512 + 1024, 512, self.up_sample_mode)
+        self.up_conv4 = UpBlock(512 + 1024, 512, self.up_sample_mode) # 512 + 1024 input channels --> 512 output channels
         self.up_conv3 = UpBlock(256 + 512, 256, self.up_sample_mode)
         self.up_conv2 = UpBlock(128 + 256, 128, self.up_sample_mode)
         self.up_conv1 = UpBlock(128 + 64, 64, self.up_sample_mode)
         # Final Convolution
-        self.conv_last = nn.Conv2d(64, out_classes, kernel_size=1)
+        self.conv_last = nn.Conv2d(64, out_classes, kernel_size=1) 
 
     def forward(self, x):
         """Forward pass of the UNet model"""
@@ -293,7 +298,7 @@ def find_centroids(segmented_img):
     return centroids
 
 # Center crop padded image / mask to original image dims
-def crop_image(image, target_image_dims=[1500,1500,3]):
+def crop_image(image, target_image_dims):
 
     target_size = target_image_dims[0]
     image_size = len(image)
@@ -304,3 +309,17 @@ def crop_image(image, target_image_dims=[1500,1500,3]):
         padding:image_size - padding,
         :,
     ]
+
+def get_subset(dataset, subset_size):
+    """Get a subset of the dataset
+    
+    Args:
+        dataset (CaImagesDataset): dataset to get subset from
+        subset_size (int): size of the subset
+        
+    Returns:
+        subset (CaImagesDataset): subset of the dataset
+    """
+    # get a random subset of the dataset
+    subset = torch.utils.data.Subset(dataset, random.sample(range(len(dataset)), subset_size))
+    return subset

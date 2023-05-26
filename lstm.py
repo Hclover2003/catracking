@@ -312,6 +312,8 @@ def get_norm_width_height(video_dir, position_dir, videos, imgs_dct, positions_d
 
 # SET CONSTANTS
 data_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data"
+model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\lstm"
+results_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\lstm"
 
 videos = ['11409', "11410", '11411', '11413', '11414', '11415']
 imgs_dct = {}
@@ -320,24 +322,37 @@ width, height = get_norm_width_height( rf"{data_dir}\imgs", rf"{data_dir}\positi
 print(f"Max width: {width} | Max height: {height}")
 print(f"Finished loading images and positions: {len(imgs_dct)} images, {len(positions_dct)} positions")
 
-if False:
-  # Concatenate all videos into one dataframe
-  df_lst = []
-  for ava in positions_dct.values():
-      df_lst.append(get_features_and_outcome(10, ava)) # Get features and outcome variables for each video
-  df = pd.concat(df_lst)
+# TRAIN MODEL
+load = input("Load X model? Y/N") # True if loading model, False if training model
+if load.lower() == "y":
+  load = True
+  load_num = int(input("Load X model number: "))
+else:
+  load = False
 
-  # Separate features X and outcome Y variables
-  X = np.array(df.prev_n_x.tolist())
-  Y = np.array(df.curr_x.tolist())
+train = input("Train X model? Y/N") # True if training x model, False if loading model
+if train.lower() == "y":
+  train = True
+  save_num = int(input("Save X model number: "))
 
+else:
+  train = False
 
-  # Train-test split
-  split = math.floor(len(df)*0.8)
-  x_train = X[:split]
-  x_test = X[split:]
-  y_train = Y[:split]
-  y_test = Y[split:]
+load2 = input("Load Y model? Y/N") # True if loading model, False if training model
+if load2.lower() == "y":
+  load2 = True
+  load_num2 = int(input("Load Y model number: "))
+else:
+  load2 = False
+
+train2 = input("Train Y model? Y/N") # True if training y model, False if loading model
+if train2.lower() == "y":
+  train2 = True
+  save_num2 = int(input("Save Y model number: "))
+else:
+  train2 = False
+
+visual = False
 
 # PREPARE DATA FOR LSTM
 # Train-test split
@@ -347,7 +362,10 @@ for video in videos:
     print(f"video {video} ...")
     positions = positions_dct[video]
     img_dir =rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original\{video}"
-    video_df= get_features_and_outcome_w_visual(10, max_height=height, max_width=width, img_dir=img_dir, neuron_positions=positions) # Get features and outcome variables for each video
+    if visual:
+      video_df= get_features_and_outcome_w_visual(10, max_height=height, max_width=width, img_dir=img_dir, neuron_positions=positions) # Get features and outcome variables for each video
+    else:
+      video_df= get_features_and_outcome(10, neuron_positions=positions)
     split = math.floor(len(video_df)*0.8)
     df_train_lst.append(video_df[:split]) # Get features and outcome variables for each video
     df_test_lst.append(video_df[split:]) # Get features and outcome variables for each video
@@ -382,19 +400,12 @@ test_set2 = CaImagesDataset(x_test2,y_test2)
 print("Finished creating dataset and dataloader")
 
 
-# TRAIN MODEL
-train = False # True if training x model, False if loading model
-load=False
-load_num = 2 # for saving/loading model x
-save_num = 1
 
-train2 = True # True if training y model, False if loading model
-load2=False
-load_num2 = 3 # for saving/loading model y
-save_num2=4
 # Get X model
 if train:
   # Create model
+  if load:
+    model = joblib.load(f'{model_dir}/model{load_num}.pkl')
   model = neural_network()
 
   # Optimizer and loss function 
@@ -415,7 +426,7 @@ if train:
       train_times[existing_epochs] = loss
       if i%50 == 0:
           print(existing_epochs,"th iteration : ",loss)
-  joblib.dump(model, f'model{save_num}.pkl')
+  joblib.dump(model, f'{model_dir}/model{save_num}.pkl')
   print(f"saved x model {save_num}")
 
     # Plot loss curve
@@ -425,14 +436,14 @@ if train:
   plt.title("Train Loss Curve")
   plt.show()
 else:
-  model = joblib.load(f'model{load_num}.pkl')
+  model = joblib.load(f'{model_dir}/model{load_num}.pkl')
   print("loaded x model")
 
 # Get Y model
 if train2:
   # Create model
   if load2:
-     model2=joblib.load(f'ymodel{load_num2}.pkl')
+     model2=joblib.load(f'{model_dir}/ymodel{load_num2}.pkl')
   else:
     model2 = neural_network()
 
@@ -454,7 +465,7 @@ if train2:
       train_times2[existing_epochs2] = loss2
       if i%50 == 0:
           print(existing_epochs2,"th iteration : ", loss2)
-  joblib.dump(model2, f'ymodel{save_num2}.pkl')
+  joblib.dump(model2, f'{model_dir}/ymodel{save_num2}.pkl')
   print(f"saved y model {save_num2}")
 
   # Plot loss curve
@@ -464,7 +475,7 @@ if train2:
   plt.title("Train Loss Curve")
   plt.show()
 else:
-  model2 = joblib.load(f'ymodel{load_num2}.pkl')
+  model2 = joblib.load(f'{model_dir}/ymodel{load_num2}.pkl')
   print("loaded y model")
 
 # VISUALIZE PREDICTIONS

@@ -67,19 +67,21 @@ class CaImagesDataset(torch.utils.data.Dataset):
             image, mask = sample['image'], sample['mask']
         
         # apply preprocessing
-        if self.preprocessing:
-            image = self.preprocessing(image)
-            _transform = []
-            _transform.append(transforms.ToTensor())
+        _transform = []
+        _transform.append(transforms.ToTensor())
 
-            img_size = 512
-            pad_left = (img_size - self.image_dim[0])//2
-            pad_top= (img_size - self.image_dim[1])//2
-            pad_right = img_size - self.image_dim[0] - pad_left
-            pad_bottom = img_size - self.image_dim[1] - pad_top
-            _transform.append(transforms.Pad(padding=(pad_left, pad_top, pad_right, pad_bottom), 
-                                            padding_mode='edge'))       
-            mask = transforms.Compose(_transform)(mask)
+        img_size = 512
+        width, height = self.image_dim
+        max_dim = max(img_size, width, height)
+        pad_left = (max_dim-width)//2
+        pad_right = max_dim-width-pad_left
+        pad_top = (max_dim-height)//2
+        pad_bottom = max_dim-height-pad_top
+        _transform.append(transforms.Pad(padding=(pad_left, pad_top, pad_right, pad_bottom), 
+                                        padding_mode='edge'))
+        _transform.append(transforms.Resize(interpolation=transforms.InterpolationMode.NEAREST_EXACT,size=(img_size, img_size)))  
+        mask = transforms.Compose(_transform)(mask)
+        image = transforms.Compose(_transform)(image)
             
         return image, mask
         
@@ -157,18 +159,18 @@ class UNet(nn.Module):
 
     def forward(self, x):
         """Forward pass of the UNet model
-        x: [1, 512, 512]
+        x: (16, 1, 512, 512)
         """
-        x, skip1_out = self.down_conv1(x) # x: [64, 256, 256], skip1_out: [64, 512, 512] (channels, height, width)
-        x, skip2_out = self.down_conv2(x) # x: [128, 128, 128], skip2_out: [128, 256, 256]
-        x, skip3_out = self.down_conv3(x) # x: [256, 64, 64], skip3_out: [256, 128, 128]
-        x, skip4_out = self.down_conv4(x) # x: [512, 32, 32], skip4_out: [512, 64, 64]
-        x = self.double_conv(x) # x: [1024, 32, 32]
-        x = self.up_conv4(x, skip4_out) # x: [512, 64, 64]
-        x = self.up_conv3(x, skip3_out)
-        x = self.up_conv2(x, skip2_out)
-        x = self.up_conv1(x, skip1_out)
-        x = self.conv_last(x)
+        x, skip1_out = self.down_conv1(x) # x: (16, 64, 256, 256), skip1_out: (16, 64, 512, 512) (batch_size, channels, height, width)
+        x, skip2_out = self.down_conv2(x) # x: (16, 128, 128, 128), skip2_out: (16, 128, 256, 256)
+        x, skip3_out = self.down_conv3(x) # x: (16, 256, 64, 64), skip3_out: (16, 256, 128, 128)
+        x, skip4_out = self.down_conv4(x) # x: (16, 512, 32, 32), skip4_out: (16, 512, 64, 64)
+        x = self.double_conv(x) # x: (16, 1024, 32, 32)
+        x = self.up_conv4(x, skip4_out) # x: (16, 512, 64, 64)
+        x = self.up_conv3(x, skip3_out) # x: (16, 256, 128, 128)
+        x = self.up_conv2(x, skip2_out) # x: (16, 128, 256, 256)
+        x = self.up_conv1(x, skip1_out) # x: (16, 64, 512, 512)
+        x = self.conv_last(x) # x: (16, 1, 512, 512)
         return x
 
 def get_training_augmentation():
@@ -214,17 +216,17 @@ def get_preprocessing(preprocessing_fn=None, image_dim=(512, 512)):
     _transform.append(transforms.ToTensor())
 
     img_size = 512
-    pad_left = (img_size - image_dim[0])//2
-    pad_top= (img_size - image_dim[1])//2
-    pad_right = img_size - image_dim[0] - pad_left
-    pad_bottom = img_size - image_dim[1] - pad_top
-    print("Adding padding")
-    print(pad_left, pad_top, pad_right, pad_bottom)
+    width, height = image_dim
+    max_dim = max(img_size, width, height)
+    pad_left = (max_dim-width)//2
+    pad_right = max_dim-width-pad_left
+    pad_top = (max_dim-height)//2
+    pad_bottom = max_dim-height-pad_top
     _transform.append(transforms.Pad(padding=(pad_left, pad_top, pad_right, pad_bottom), 
-                                     padding_mode='edge'))        
+                                    padding_mode='edge'))
+    _transform.append(transforms.Resize(interpolation=transforms.InterpolationMode.NEAREST_EXACT,size=(img_size, img_size)))       
     if preprocessing_fn:
         _transform.append(preprocessing_fn)
-    
 
     return transforms.Compose(_transform)
 

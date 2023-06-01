@@ -5,6 +5,8 @@ unet_data/
 results/
 lstmimgs/
 models/
+models/lstm/
+models/unet/
 results_num/
 unet_data_small/
 unet_imgs/

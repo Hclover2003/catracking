@@ -41,10 +41,10 @@ import joblib
 import time
 import pickle
 
-class neural_network(nn.Module):
+class NeuralNetwork(nn.Module):
     """Neural network with LSTM layer and fully connected layer"""
     def __init__(self):
-        super(neural_network,self).__init__()
+        super(NeuralNetwork,self).__init__()
         self.lstm = nn.LSTM(input_size=1, 
                             hidden_size=5,
                             num_layers=1,
@@ -296,7 +296,7 @@ def load_data(file_name):
   return lst
 
 # predict coordinates for a video
-def pred_video(n_input, video, model, model2, width, height, file_name):
+def pred_video(n_input, video, model, width, height, file_name, positions):
     """
     Predicts coordinates for a video
     
@@ -316,10 +316,8 @@ def pred_video(n_input, video, model, model2, width, height, file_name):
     list of frames to reset at
     """
     start_time = time.time() 
-    ava = positions_dct[video]
-
-    inputx = np.array(scale_data([x for (x, y) in ava][:n_input], width)).reshape((-1, 1)) # video 11408 has 2570 frames, these are the x positions of AVA for first 10 frames
-    inputy = np.array(scale_data([y for (x, y) in ava][:n_input], height)).reshape((-1, 1)) # y positions of AVA for first 10 frames
+    inputx = np.array(scale_data([x for (x, y) in positions][:n_input], width)).reshape((-1, 1)) # video 11408 has 2570 frames, these are the x positions of AVA for first 10 frames
+    inputy = np.array(scale_data([y for (x, y) in positions][:n_input], height)).reshape((-1, 1)) # y positions of AVA for first 10 frames
 
     # Test metrics
     num_correct = 0 # number of correct predictions
@@ -338,17 +336,15 @@ def pred_video(n_input, video, model, model2, width, height, file_name):
 
     # i=0 corresponds to frame 10
     # in total, there are 2570 frames. We are predicting frames 10 to 2570, which means we use i=0 to i=2560
-    for i in range(0, len(ava)-n_input):
+    for i in range(0, len(positions)-n_input):
         frame = i+n_input # frame we are predicting
         print(f"frame {frame}")
 
         # features
         x_init = torch.from_numpy(np.float32(np.expand_dims(inputx[i:frame].reshape(-1, 1), 0))) # we take previous 10 frames as features
-        y_init = torch.from_numpy(np.float32(np.expand_dims(inputy[i:frame].reshape(-1, 1), 0))) # this is scaled
         
         # predicted & actual coordinates
         predx = unscale_data(model(x_init).detach().numpy()[0][0], full=width) # this is unscaled
-        predy = unscale_data(model2(y_init).detach().numpy()[0][0], full=height)
         pred_lst.append((predx, predy))
 
         actx, acty = ava[frame] # actual coordinates for this frame

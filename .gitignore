@@ -3,6 +3,15 @@ images/
 results/
 unet_data/
 results/
+lstmimgs/
+models/
+results_num/
+unet_data_small/
+unet_imgs/
+unet_results/
 .DS_Store
 .gitignore
 .venv
+a1.png
+Figure_1.png
+Figuree_1.png

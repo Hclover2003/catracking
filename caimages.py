@@ -21,6 +21,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from torch.utils.data import DataLoader
+import torchvision.transforms as transforms
+
 import segmentation_models_pytorch.utils.metrics
 
 class CaImagesDataset(torch.utils.data.Dataset):
@@ -30,7 +32,6 @@ class CaImagesDataset(torch.utils.data.Dataset):
     Args:
         images_dir (str): path to images folder
         masks_dir (str): path to segmentation masks folder
-        class_rgb_values (list): RGB values of select classes to extract from segmentation mask
         augmentation (albumentations.Compose): data transfromation pipeline 
             (e.g. flip, scale, etc.)
         preprocessing (albumentations.Compose): data preprocessing 
@@ -42,26 +43,23 @@ class CaImagesDataset(torch.utils.data.Dataset):
             self, 
             images_dir, 
             masks_dir, 
-            class_rgb_values=None, 
             augmentation=None, 
             preprocessing=None,
+            image_dim = (512, 512)
     ):
         
         self.image_paths = [os.path.join(images_dir, image_id) for image_id in sorted(os.listdir(images_dir))]
         self.mask_paths = [os.path.join(masks_dir, image_id) for image_id in sorted(os.listdir(masks_dir))]
-
-        self.class_rgb_values = class_rgb_values
-        self.augmentation = augmentation
+        self.augmentation = augmentation 
         self.preprocessing = preprocessing
+        self.image_dim = image_dim
     
     def __getitem__(self, i):
         
-        # read images and masks # they have 3 values (BGR) --> read as RGB
-        image = cv2.cvtColor(cv2.imread(self.image_paths[i]), cv2.COLOR_BGR2RGB)
-        mask = cv2.cvtColor(cv2.imread(self.mask_paths[i]), cv2.COLOR_BGR2RGB)
+        # read images and masks # they have 3 values (BGR) --> read as 2 channel grayscale (H, W)
+        image = cv2.cvtColor(cv2.imread(self.image_paths[i]), cv2.COLOR_BGR2GRAY) # each pixel is 
+        mask = cv2.cvtColor(cv2.imread(self.mask_paths[i]), cv2.COLOR_BGR2GRAY) # each pixel is 0 or 255
         
-        # one-hot-encode the mask
-        mask = one_hot_encode(mask, self.class_rgb_values).astype('float')
         
         # apply augmentations
         if self.augmentation:
@@ -70,8 +68,18 @@ class CaImagesDataset(torch.utils.data.Dataset):
         
         # apply preprocessing
         if self.preprocessing:
-            sample = self.preprocessing(image=image, mask=mask)
-            image, mask = sample['image'], sample['mask']
+            image = self.preprocessing(image)
+            _transform = []
+            _transform.append(transforms.ToTensor())
+
+            img_size = 512
+            pad_left = (img_size - self.image_dim[0])//2
+            pad_top= (img_size - self.image_dim[1])//2
+            pad_right = img_size - self.image_dim[0] - pad_left
+            pad_bottom = img_size - self.image_dim[1] - pad_top
+            _transform.append(transforms.Pad(padding=(pad_left, pad_top, pad_right, pad_bottom), 
+                                            padding_mode='edge'))       
+            mask = transforms.Compose(_transform)(mask)
             
         return image, mask
         
@@ -102,7 +110,7 @@ class DownBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(DownBlock, self).__init__()
         self.double_conv = DoubleConv(in_channels, out_channels)
-        self.down_sample = nn.MaxPool2d(2)
+        self.down_sample = nn.MaxPool2d(2, stride=2)
 
     def forward(self, x):
         skip_out = self.double_conv(x)
@@ -128,12 +136,12 @@ class UpBlock(nn.Module):
 
 class UNet(nn.Module):
     """UNet Architecture"""
-    def __init__(self, out_classes=2, up_sample_mode='conv_transpose'):
+    def __init__(self, out_classes=1, up_sample_mode='conv_transpose'):
         """Initialize the UNet model"""
         super(UNet, self).__init__()
         self.up_sample_mode = up_sample_mode
         # Downsampling Path
-        self.down_conv1 = DownBlock(3, 64) # 3 input channels --> 64 output channels
+        self.down_conv1 = DownBlock(1, 64) # 3 input channels --> 64 output channels
         self.down_conv2 = DownBlock(64, 128) # 64 input channels --> 128 output channels
         self.down_conv3 = DownBlock(128, 256) # 128 input channels --> 256 output channels
         self.down_conv4 = DownBlock(256, 512) # 256 input channels --> 512 output channels
@@ -148,13 +156,15 @@ class UNet(nn.Module):
         self.conv_last = nn.Conv2d(64, out_classes, kernel_size=1) 
 
     def forward(self, x):
-        """Forward pass of the UNet model"""
-        x, skip1_out = self.down_conv1(x)
-        x, skip2_out = self.down_conv2(x)
-        x, skip3_out = self.down_conv3(x)
-        x, skip4_out = self.down_conv4(x)
-        x = self.double_conv(x)
-        x = self.up_conv4(x, skip4_out)
+        """Forward pass of the UNet model
+        x: [1, 512, 512]
+        """
+        x, skip1_out = self.down_conv1(x) # x: [64, 256, 256], skip1_out: [64, 512, 512] (channels, height, width)
+        x, skip2_out = self.down_conv2(x) # x: [128, 128, 128], skip2_out: [128, 256, 256]
+        x, skip3_out = self.down_conv3(x) # x: [256, 64, 64], skip3_out: [256, 128, 128]
+        x, skip4_out = self.down_conv4(x) # x: [512, 32, 32], skip4_out: [512, 64, 64]
+        x = self.double_conv(x) # x: [1024, 32, 32]
+        x = self.up_conv4(x, skip4_out) # x: [512, 64, 64]
         x = self.up_conv3(x, skip3_out)
         x = self.up_conv2(x, skip2_out)
         x = self.up_conv1(x, skip1_out)
@@ -191,15 +201,8 @@ def get_validation_augmentation():
     ]
     return album.Compose(test_transform)
 
-def to_tensor(x, **kwargs):
-    """ Convert image to tensor 
-    
-    Returns: 
-        numpy.ndarray: Converted image
-    """
-    return x.transpose(2, 0, 1).astype('float32') # convert to tensor
 
-def get_preprocessing(preprocessing_fn=None):
+def get_preprocessing(preprocessing_fn=None, image_dim=(512, 512)):
     """Construct preprocessing transform    
     Args:
         preprocessing_fn (callable): data normalization function 
@@ -208,11 +211,22 @@ def get_preprocessing(preprocessing_fn=None):
         transform: albumentations.Compose
     """   
     _transform = []
+    _transform.append(transforms.ToTensor())
+
+    img_size = 512
+    pad_left = (img_size - image_dim[0])//2
+    pad_top= (img_size - image_dim[1])//2
+    pad_right = img_size - image_dim[0] - pad_left
+    pad_bottom = img_size - image_dim[1] - pad_top
+    print("Adding padding")
+    print(pad_left, pad_top, pad_right, pad_bottom)
+    _transform.append(transforms.Pad(padding=(pad_left, pad_top, pad_right, pad_bottom), 
+                                     padding_mode='edge'))        
     if preprocessing_fn:
-        _transform.append(album.Lambda(image=preprocessing_fn))
-    _transform.append(album.Lambda(image=to_tensor, mask=to_tensor))
-        
-    return album.Compose(_transform)
+        _transform.append(preprocessing_fn)
+    
+
+    return transforms.Compose(_transform)
 
 def visualize(**images):
     """
@@ -230,58 +244,7 @@ def visualize(**images):
         plt.title(name.replace('_',' ').title(), fontsize=20)
         plt.imshow(image)
     plt.show()
-
-def one_hot_encode(label, label_values):
-    """
-    Convert a segmentation image label array to one-hot format
-    by replacing each pixel value with a vector of length num_classes
-    # Arguments
-        label: The 2D array segmentation image label
-        label_values
-        
-    # Returns
-        A 2D array with the same width and hieght as the input, but
-        with a depth size of num_classes
-    """
-    semantic_map = []
-    for colour in label_values: # for each "label" (here, it would be black/white or background/neuron)
-        equality = np.equal(label, colour) # check if the given label is equal to this particular value in the labels list
-        class_map = np.all(equality, axis = -1) # check if all values in the array are True (if the label is equal to this particular value in the labels list)
-        semantic_map.append(class_map) # append the result to the semantic map
-    semantic_map = np.stack(semantic_map, axis=-1) # join sequence of arrays along a new axis
-
-    return semantic_map
     
-def reverse_one_hot(image):
-    """
-    Transform a 2D array in one-hot format (depth is num_classes),
-    to a 2D array with only 1 channel, where each pixel value is
-    the classified class key.
-    # Arguments
-        image: The one-hot format image 
-        
-    # Returns
-        A 2D array with the same width and hieght as the input, but
-        with a depth size of 1, where each pixel value is the classified 
-        class key.
-    """
-    x = np.argmax(image, axis = -1)
-    return x
-
-def colour_code_segmentation(image, label_values):
-    """
-    Given a 1-channel array of class keys, colour code the segmentation results.
-    # Arguments
-        image: single channel array where each value represents the class key.
-        label_values
-
-    # Returns
-        Colour coded image for segmentation visualization
-    """
-    colour_codes = np.array(label_values)
-    x = colour_codes[image.astype(int)]
-
-    return x
 
 def find_centroids(segmented_img):
     centroids = []

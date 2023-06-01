@@ -46,24 +46,7 @@ import time
 # random.seed(num)
 # np.random.seed(num)
 
-class NeuralNetwork(nn.Module):
-    """Neural network with LSTM layer and fully connected layer"""
-    def __init__(self):
-        super(NeuralNetwork,self).__init__()
-        self.lstm = nn.LSTM(input_size=2, 
-                            hidden_size=2,# test other num
-                            bidirectional=True,
-                            num_layers=1,
-                            batch_first=True
-                            )
-        # self.fc1 = nn.Linear(in_features=5,
-        #                      out_features=2)
 
-    def forward(self,x):
-        output,_status = self.lstm(x)
-        # output = output[:,-1,:]
-        # output = self.fc1(torch.relu(output))
-        return output
 
 class CaImagesDataset(Dataset):
     """CA Images dataset."""
@@ -311,6 +294,7 @@ def get_norm_width_height(video_dir, position_dir, videos, imgs_dct, positions_d
           width = w
   return width, height
 
+
 # SET CONSTANTS
 data_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data"
 model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\lstm"
@@ -358,40 +342,45 @@ print("Loaded data")
 
 df_train = pd.concat(df_train_lst)
 df_test = pd.concat(df_test_lst)
-
-x_train = np.array(np.array(list(zip(df_train.prev_n_x.tolist(), df_train.prev_n_y.tolist()))))
-y_train = np.array(np.array(list(zip(df_train.curr_x.tolist(), df_train.curr_y.tolist()))))
-x_test = np.array(np.array(list(zip(df_test.prev_n_x.tolist(), df_test.prev_n_y.tolist()))))
-y_test = np.array(np.array(list(zip(df_test.curr_x.tolist(), df_test.curr_y.tolist()))))
-
-
-# Create dataset and dataloader
-train_set = CaImagesDataset(x_train,y_train)
+df_train
+y_train_long = np.array(list(zip(df_train.curr_x.tolist(), df_train.curr_y.tolist())))
+y_train_long
+x_train_long = np.array(list(zip(df_train.prev_n_x.tolist(), df_train.prev_n_y.tolist())))
+x_train_long
+train_set = CaImagesDataset(x_train_long,y_train_long)
 train_loader = DataLoader(train_set,
                           shuffle=True,
                           batch_size=256 # Each batch has 256 samples. (e.g. if dataset has 2048 samples total, there are 8 training batches)
                           )
-test_set = CaImagesDataset(x_test,y_test)
-print("Finished creating dataset and dataloader")
+train_set[0]
+class NeuralNetwork(nn.Module):
+    """Neural network with LSTM layer and fully connected layer"""
+    def __init__(self):
+        super(NeuralNetwork,self).__init__()
+        self.lstm = nn.LSTM(input_size=2, 
+                            hidden_size=2,# test other num
+                            bidirectional=True,
+                            num_layers=1,
+                            batch_first=True
+                            )
+        # self.fc1 = nn.Linear(in_features=5,
+        #                      out_features=2)
 
+    def forward(self,x):
+        output,_status = self.lstm(x)
+        output = output[:,-1,:]
+        # output = self.fc1(torch.relu(output))
+        return output
+model = NeuralNetwork()
 
-
-# Get X model
-if train:
-  # Create model
-  if load:
-    model = joblib.load(f'{model_dir}/model{load_num}.pkl')
-  model = NeuralNetwork()
-
-  # Optimizer and loss function 
-  criterion = torch.nn.MSELoss()
-  optimizer = torch.optim.Adam(model.parameters(),lr=0.0001)
-  epochs = 500
-  existing_epochs=0
-  train_times = {} #key= epoch, value=loss for that epoch
-
-  for i in range(epochs+1):
-      for j,data in enumerate(train_loader):
+# Optimizer and loss function 
+criterion = torch.nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(),lr=0.0001)
+epochs = 500
+existing_epochs=0
+train_times = {} #key= epoch, value=loss for that epoch
+for i in range(500):
+    for j,data in enumerate(train_loader):
         input = data[0]
         y_actual = data[1].repeat(1, 2)
         input_act = []
@@ -407,25 +396,10 @@ if train:
         loss = criterion(y_pred,y_actual)
         loss.backward()
         optimizer.step()
-      existing_epochs+=1
-      train_times[existing_epochs] = loss
-      if i%50 == 0:
-          print(existing_epochs,"th iteration : ",loss)
-  joblib.dump(model, f'{model_dir}/model{save_num}.pkl')
-  print(f"saved x model {save_num}")
+    if i%10 == 0:
+        print(existing_epochs,"th iteration : ",loss)
 
-    # Plot loss curve
-  losses = [tsr.detach().numpy().flat[0] for tsr in train_times.values()]
-  plt.figure()
-  plt.plot(train_times.keys(), losses)
-  plt.title("Train Loss Curve")
-  plt.show()
-else:
-  model = joblib.load(f'{model_dir}/model{load_num}.pkl')
-  print("loaded x model")
-
-
-# Plot y coordinates actual vs predicted
+joblib.dump(model, rf"{model_dir}\lstm_model_1.pkl")
 fig2, ax2 = plt.subplots(1,2)
 train_pred2 = model(train_set2[:][0].view(-1,10,1)).view(-1)
 test_pred2 = model(test_set2[:][0].view(-1,10,1)).view(-1)
@@ -443,31 +417,3 @@ ax2[0].set_ylabel("Y Coordinates")
 ax2[1].set_xlabel("Frame")
 ax2[1].legend()
 plt.show()
-
-# Plot x and y coordinates
-fig3, ax3 = plt.subplots(1,2)
-ax3[0].plot(train_pred.detach().numpy(), train_pred2.detach().numpy(),label='predicted')
-ax3[0].plot(train_set[:][1].view(-1), train_set2[:][1].view(-1),label='original')
-ax3[1].plot(test_pred.detach().numpy(), test_pred2.detach().numpy(),label='predicted')
-ax3[1].plot(test_set[:][1].view(-1), test_set2[:][1].view(-1),label='original')
-ax3[0].title.set_text("Training Set Path of Neuron (X and Y Coordinates)")
-ax3[1].title.set_text("Test Set Path of Neuron (X and Y Coordinates)")
-ax3[0].set_xlabel("X Coordinates")
-ax3[0].set_ylabel("Y Coordinates")
-ax3[1].set_xlabel("X Coordinates")
-ax3[0].legend()
-ax3[1].legend()
-plt.show()
-
-# EVALUATE MODEL
-# RMSE
-print("X coordinates")
-print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred.view(-1).detach().numpy(), train_set[:][1].view(-1).detach().numpy()))}")
-print(f"Test RMSE: {np.sqrt(mean_squared_error(test_pred.view(-1).detach().numpy(), test_set[:][1].view(-1).detach().numpy()))}")
-# print(f"Train R^2: { model_selection.cross_val_score(model, train_set[:][0].view(-1,10,1), train_set[:][1].view(-1), cv=5).mean() }")
-# print(f"Test R^2: { model_selection.cross_val_score(model, test_set[:][0].view(-1,10,1), test_set[:][1].view(-1), cv=5).mean() }")
-
-print("Y coordinates")
-print(f"Train RMSE: {np.sqrt(mean_squared_error(train_pred2.view(-1).detach().numpy(), train_set2[:][1].view(-1).detach().numpy()))}")
-print(f"Train RMSE: {np.sqrt(mean_squared_error(test_pred2.view(-1).detach().numpy(), test_set2[:][1].view(-1).detach().numpy()))}")
-

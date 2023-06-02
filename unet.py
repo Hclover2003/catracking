@@ -30,14 +30,14 @@ if __name__ == '__main__':
 
     ## DEFINE UNET MODEL
 
-    x_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_small\original\train"
-    y_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_small\ground_truth\train"
+    x_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\original\train"
+    y_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\ground_truth\train"
 
-    x_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_small\original\valid"
-    y_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_small\ground_truth\valid"
+    x_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\original\valid"
+    y_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\ground_truth\valid"
 
-    x_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_small\original\test"
-    y_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_small\ground_truth\test"
+    x_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\original\test"
+    y_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\ground_truth\test"
 
     height, width = cv2.imread(os.path.join(x_train_dir, os.listdir(x_train_dir)[0])).shape[:2]
     # Get train and val dataset instances
@@ -66,10 +66,9 @@ if __name__ == '__main__':
 
     if TRAINING:
         model = UNet()
-        m=nn.Sigmoid()
         print("Starting training...")
-        EPOCHS = 4
-        criterion = torch.nn.BCELoss()
+        EPOCHS = 1
+        criterion = torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(),lr=0.0001)
         loss_list = [] # train and valid logs
         for epoch in range(EPOCHS):
@@ -80,46 +79,47 @@ if __name__ == '__main__':
                 # print(pred)
                 # print(pred.shape)
                 # exit()
-                loss = criterion(m(pred), labels) # calculate loss (binary cross entropy)
+                loss = criterion(pred, labels) # calculate loss (binary cross entropy)
                 loss.backward() # calculate gradients (backpropagation)
                 optimizer.step() # update model weights (values for kernels)
                 print(f"Step: {i}, Loss: {loss}")
                 loss_list.append(loss)
             print(f"Epoch: {epoch}, Loss: {loss}")
 
-        joblib.dump(model, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model9.pkl")
+        joblib.dump(model, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model1_full.pkl")
         try:
-            joblib.dump(loss_list, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\loss_list9.pkl")
+            joblib.dump(loss_list, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\loss_list1_full.pkl")
         except:
             print("Failed to save loss list")
 
 
     if TESTING:
-        model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model8.pkl")
+        model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model10.pkl")
         image, gt_mask = train_dataset[2] # image and ground truth from test dataset
         print(image.shape, gt_mask.shape)
         print(image)
+        suffix = "_1"
         plt.imshow(image.squeeze(0).numpy(), cmap='gray')
-        plt.savefig(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test.png")
+        plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test{suffix}.png")
         plt.show()
         plt.imshow(gt_mask.squeeze(0).numpy(), cmap='gray')
-        plt.savefig(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_gt.png")
+        plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_gt{suffix}.png")
         plt.show()
         x_tensor = image.to(DEVICE).unsqueeze(0)
         pred_mask = model(x_tensor)
         print(pred_mask)
         print(pred_mask.shape)
         plt.imshow(pred_mask.detach().numpy().squeeze(0).squeeze(0))
-        plt.savefig(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred.png")
+        plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred{suffix}.png")
         plt.show()
         plt.imshow(pred_mask.detach().numpy().squeeze(0).squeeze(0), cmap="gray")
-        plt.savefig(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred_gray.png")
+        plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred_gray{suffix}.png")
         plt.show()
         plt.imshow(TF.invert(pred_mask).detach().numpy().squeeze(0).squeeze(0), cmap="gray")
-        plt.savefig(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred_gray_invert.png")
+        plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred_gray_invert{suffix}.png")
         plt.show()
         plt.imshow(TF.invert(pred_mask).detach().numpy().squeeze(0).squeeze(0))
-        plt.savefig(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred_invert.png")
+        plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred_invert{suffix}.png")
         plt.show()
 
 

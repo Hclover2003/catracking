@@ -109,7 +109,9 @@ if __name__ == '__main__':
         model = UNet()
         print("Starting training...")
         # criterion = torch.nn.BCEWithLogitsLoss()
-        criterion = FocalLoss()
+        alpha = 0.25
+        gamma = 2
+        criterion = torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(),lr=lr)
         loss_list = [] # train and valid logs
         for epoch in range(epochs):
@@ -121,7 +123,10 @@ if __name__ == '__main__':
                 pred = pred.squeeze(1)
                 labels = labels.squeeze(1)
                 print(pred.shape, labels.shape)
-                loss = criterion(pred, labels) # calculate loss (binary cross entropy)
+                bce_loss = criterion(pred, labels) # calculate loss (binary cross entropy)
+                p_t = torch.exp(-bce_loss)
+                focal_loss = alpha* (1 - p_t) ** gamma * bce_loss
+                loss = focal_loss.mean()
                 loss.backward() # calculate gradients (backpropagation)
                 optimizer.step() # update model weights (values for kernels)
                 print(f"Step: {i}, Loss: {loss}")

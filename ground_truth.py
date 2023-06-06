@@ -3,7 +3,8 @@ import cv2
 import os
 import numpy as np;
 import matplotlib.pyplot as plt
-import natsort
+import shutil
+# import natsort
 
 def save_imgs(imgs, save_dir):
     channel=0
@@ -84,6 +85,17 @@ def save_og_ground(save_dir, frame, label, save_x_dir, save_y_dir):
     plt.imsave(f"{save_x_dir}/{label}.png", img) # save original image (feature)
     # plt.imsave(f"{save_y_dir}/{label}.png", blob_img, cmap="gray") # save segmented image (label)
 
+skip = 27
+save_dir = r'C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\valid'
+load_dir = r'C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\ground_truth\valid'
+files = [f for f in os.listdir(load_dir) if os.path.isfile(os.path.join(load_dir, f))]
+selected_files = [files[i] for i in range(0, len(files), skip)]
+print(len(selected_files))
+for file_name in selected_files:
+    shutil.copy(f'{load_dir}\{file_name}', f'{save_dir}\{file_name}')
+    print(f"Saved {file_name} to {save_dir} from {load_dir}")
+
+exit()
 # file_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lst" # change to your directory
 video_num = "11409" # change to video num 
 videos = ['11409', "11410", '11411', '11413', '11414', '11415', '11433', '11434']

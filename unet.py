@@ -12,6 +12,7 @@ if __name__ == '__main__':
     import statsmodels.formula.api as smf
     import torch 
     import torch.nn as nn
+    import torch.nn.functional as F
     import torchvision.transforms.functional as TF
     import segmentation_models_pytorch as smp
     import albumentations as album
@@ -27,17 +28,44 @@ if __name__ == '__main__':
     from torch.utils.data import DataLoader
     from caimages import *
     import segmentation_models_pytorch.utils.metrics
+    import wandb
+    import random
+    import torch
+
+    class FocalLoss(nn.Module):
+        
+        def __init__(self, weight=None, 
+                    gamma=2., reduction='none'):
+            nn.Module.__init__(self)
+            self.weight = weight
+            self.gamma = gamma
+            self.reduction = reduction
+            
+        def forward(self, input_tensor, target_tensor):
+            log_prob = F.log_softmax(input_tensor, dim=-1)
+            print(log_prob)
+            prob = torch.exp(log_prob)
+            print(prob)
+            print(log_prob.shape, prob.shape)
+            print(((1 - prob) ** self.gamma) * log_prob)
+            return F.nll_loss(
+                ((1 - prob) ** self.gamma) * log_prob, 
+                target_tensor, 
+                weight=self.weight,
+                reduction = self.reduction
+            )
+
 
     ## DEFINE UNET MODEL
 
-    x_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\original\train"
-    y_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\ground_truth\train"
+    x_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\original\train"
+    y_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\train"
 
-    x_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\original\valid"
-    y_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\ground_truth\valid"
+    x_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\original\valid"
+    y_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\valid"
 
-    x_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\original\test"
-    y_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\ground_truth\test"
+    x_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\original\test"
+    y_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\test"
 
     height, width = cv2.imread(os.path.join(x_train_dir, os.listdir(x_train_dir)[0])).shape[:2]
     # Get train and val dataset instances
@@ -59,42 +87,57 @@ if __name__ == '__main__':
     print("Data loaders created.")
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    target_width = 454 # change to max width of images in dataset (make sure dividable by 2)
-    target_height = 546 # change to max height of images in dataset
     TRAINING = True
     TESTING = False
 
     if TRAINING:
+        lr = 0.001
+        epochs = 5
+        # start a new wandb run to track this script
+        wandb.init(
+            # set the wandb project where this run will be logged
+            project="unet-segmentation",
+            
+            # track hyperparameters and run metadata
+            config={
+            "learning_rate": lr,
+            "architecture": "CNN",
+            "dataset": "CIFAR-100",
+            "epochs": epochs,
+            }
+        )
         model = UNet()
         print("Starting training...")
-        EPOCHS = 1
-        criterion = torch.nn.BCEWithLogitsLoss()
-        optimizer = torch.optim.Adam(model.parameters(),lr=0.0001)
+        # criterion = torch.nn.BCEWithLogitsLoss()
+        criterion = FocalLoss()
+        optimizer = torch.optim.Adam(model.parameters(),lr=lr)
         loss_list = [] # train and valid logs
-        for epoch in range(EPOCHS):
+        for epoch in range(epochs):
             for i, data in enumerate(train_loader):
                 print("Progress: {:.2%}".format(i/len(train_loader)))
                 inputs, labels = data
                 pred = model(inputs)
-                # print(pred)
-                # print(pred.shape)
-                # exit()
+                print(pred.shape, labels.shape)
+                pred = pred.squeeze(1)
+                labels = labels.squeeze(1)
+                print(pred.shape, labels.shape)
                 loss = criterion(pred, labels) # calculate loss (binary cross entropy)
                 loss.backward() # calculate gradients (backpropagation)
                 optimizer.step() # update model weights (values for kernels)
                 print(f"Step: {i}, Loss: {loss}")
                 loss_list.append(loss)
+                wandb.log({"loss": loss})
             print(f"Epoch: {epoch}, Loss: {loss}")
-
-        joblib.dump(model, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model1_full.pkl")
+        joblib.dump(model, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model2_full.pkl")
+        wandb.finish()
         try:
-            joblib.dump(loss_list, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\loss_list1_full.pkl")
+            joblib.dump(loss_list, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\loss_list2_full.pkl")
         except:
             print("Failed to save loss list")
 
 
     if TESTING:
-        model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model10.pkl")
+        model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model2_full.pkl")
         image, gt_mask = train_dataset[2] # image and ground truth from test dataset
         print(image.shape, gt_mask.shape)
         print(image)
@@ -107,6 +150,11 @@ if __name__ == '__main__':
         plt.show()
         x_tensor = image.to(DEVICE).unsqueeze(0)
         pred_mask = model(x_tensor)
+        pred_mask = nn.Sigmoid()(pred_mask)
+        print(pred_mask.max())
+        print(pred_mask.min())
+        # pred_mask[pred_mask < 0.5] = 0
+        # pred_mask[pred_mask >= 0.5] = 1
         print(pred_mask)
         print(pred_mask.shape)
         plt.imshow(pred_mask.detach().numpy().squeeze(0).squeeze(0))

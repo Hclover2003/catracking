@@ -63,7 +63,7 @@ def find_centroids(segmented_img):
     cY = int(M["m01"] / M["m00"])
     centroids.append((cX, cY))
   
-  return centroids
+  return centroids, cont
 
 def get_dist_score(x, y, x2, y2):
   """Returns distance score between two points
@@ -87,6 +87,24 @@ def get_closest_cent(centroids:List, pred:Tuple, log=False):
       max_score = score
       coords = (pot_x, pot_y)
   return coords
+
+def crop_img(img, x, y, w, h):
+  """Crop image to x, y, w, h"""
+  return img[max(0, y-(h//2)): min(img.shape[0], y+(h//2)),
+              max(0, x-(w//2)): min(img.shape[1], x+(w//2))]
+
+def get_color_score(img1, img2):
+  hst1 = cv2.calcHist([img1], [0], None, [256], [0, 256])
+  hst2 = cv2.calcHist([img2], [0], None, [256], [0, 256])
+  score = cv2.compareHist(hst1, hst2, cv2.HISTCMP_CORREL)
+  return score
+
+def get_shape_score(img1, img2):
+  area1 = cv2.contourArea(img1)
+  area2 = cv2.contourArea(img2)
+  return area1 - area2
+
+
 
 class CaImagesDataset(Dataset):
     """CA Images dataset."""
@@ -150,7 +168,7 @@ for video in videos:
 print("Test/Train split complete")
 
 # Split into sequences of length 100
-seq_len=100
+seq_len=200
 df_train_lst_shortened = [split_lst(lst, seq_len)[:-1] for lst in df_train_lst]
 df_train_lst_shortened = np.concatenate(df_train_lst_shortened)
 df_test_lst_shortened = [split_lst(lst, seq_len)[:-1] for lst in df_test_lst]
@@ -163,13 +181,13 @@ if NEW:
   model = NeuralNetwork()
   losses = []
 else:
-  model = joblib.load(rf"{model_dir}\lstm_model6.pkl")
-  losses = joblib.load(rf"{model_dir}\lstm_losses6.pkl")
+  model = joblib.load(rf"{model_dir}\lstm_model9.pkl")
+  losses = joblib.load(rf"{model_dir}\lstm_losses9.pkl")
 print("Model loaded")
 
 if TRAINING:
   lr = 0.00001
-  epochs = 500
+  epochs = 1000
   wandb.init(
       project="lstm",
       config={
@@ -182,11 +200,11 @@ if TRAINING:
   DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   criterion = nn.MSELoss()
   optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-  batch_size = 8
+  batch_size = 16
   num_batches = len(df_train_lst_shortened)//batch_size
   print(f"Batch size = {batch_size}, Num batches: {num_batches}")
-
-  for i in range(epochs):
+  table = wandb.Table(columns=["Epoch", "Image"])
+  for epoch in range(epochs):
     for j in range(num_batches):
       train_input = torch.tensor(df_train_lst_shortened[j*batch_size:(j+1)*batch_size][:, :-1, :], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
       pred = model(train_input)
@@ -194,58 +212,118 @@ if TRAINING:
       loss = criterion(pred, train_input)
       loss.backward()
       optimizer.step()
-    if i % 10 == 0:
-      print(f"Epoch: {i} | Loss: {loss}")
+    if epoch % 10 == 0:
       losses.append(loss)
       wandb.log({"loss": loss})
-
-  joblib.dump(model, rf"{model_dir}\lstm_model6.pkl")
-  joblib.dump(losses, rf"{model_dir}\lstm_losses6.pkl")
-  plt.plot(*zip(*pred.detach()[1].numpy()), label="Predicted") #1st sequence in batch
-  plt.plot(*zip(*train_input[1]), label="Actual") # 1st sequence in batch
-  plt.legend()
-  plt.show()
+      test_input = torch.tensor(df_test_lst_shortened[0:batch_size][:, :-1, :], dtype=torch.float32)
+      test_actual = torch.tensor(df_test_lst_shortened[0:batch_size][:, 1:, :], dtype=torch.float32)
+      test_pred = model(test_input)
+      valid_loss = criterion(test_pred, test_actual)
+      wandb.log({"valid_loss": valid_loss})
+      print(f"Epoch: {epoch} | Loss: {loss} | Valid Loss: {valid_loss}")
+    if epoch % 100 == 0:
+      colours = np.arange(test_pred.detach()[1].numpy().shape[0])
+      predx = test_pred.detach()[1].numpy()[:,0]
+      predy = test_pred.detach()[1].numpy()[:,1]
+      actx = test_actual.detach()[1][:,0]
+      acty = test_actual.detach()[1][:,1]
+      fig = plt.figure()
+      plt.scatter(test_input.detach()[1].numpy()[0,0], test_input.detach()[1].numpy()[0,1], label="Input")
+      plt.scatter(predx, predy, c = colours, cmap="Greens", label="Predicted") #1st sequence in batch
+      plt.colorbar()
+      plt.scatter(actx, acty, c = colours, cmap = "Oranges", label="Actual") # 1st sequence in batch
+      plt.colorbar()
+      plt.legend()
+      table.add_data(epoch, wandb.Image(fig))
+      plt.close()
+  wandb.log({"predictions": table})
+  joblib.dump(model, rf"{model_dir}\lstm_model10.pkl")
+  joblib.dump(losses, rf"{model_dir}\lstm_losses10.pkl")
+  wandb.finish()
 
 video = '11409'
-split = math.floor(len(positions_dct[video])*0.8) # split that we did for the test set (ie. the first "frame/position" in act_seq is actually frame split (2131) in the original video )
-act_seq = df_test_lst[1] # full actual sequence of video 11408 (normalized) 
 h, w = imgs_dct[video].shape[2:]
-head = 10
-input = np.array(act_seq[:head]).reshape(-1,2) # first 10 positions only
+
+head = 10 # Starting index
+split = math.floor(len(positions_dct[video])*0.8) # split that we did for the test set (ie. the first "frame/position" in act_seq is actually frame split (2131) in the original video )
+
+act_seq = np.array(df_test_lst[1]) # full actual sequence of video 11408 (normalized)  (use as label y)
+input = act_seq[:head, :] # running log of predictions (use as feature x)
+
 correct = 0
 wrong = 0
 
+TESTING = True
 RESET = False
 max_reset = 2
 reset_num = 0
 
-for i in range(head, len(act_seq)):
-  frame = split+i
-  print(f"Given first {head-1} frames, predict frame: {frame}")
-  act_pt = np.multiply(act_seq[i], [w, h]) # Actual value for this frame
-  pred = model(torch.tensor(input, dtype=torch.float32))
-  pred_pt = np.multiply(pred[-1].detach(), [w, h]).detach().numpy()
-  mask = cv2.cvtColor(cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\ground_truth\{video}\{frame}.png"), cv2.COLOR_BGR2GRAY)
-  cnts = find_centroids(mask)
-  closest = get_closest_cent(cnts, pred_pt)
-  closest_act = get_closest_cent(cnts, act_pt)
-  if closest_act == closest:
-    correct += 1
-  else:
-    wrong += 1
-  if RESET and reset_num < max_reset:
-     closest_norm = [closest_act[0]/w, closest_act[1]/h]
-     reset_num += 1
-  else:
-    closest_norm = [closest[0]/w, closest[1]/h]
-  input = np.concatenate((input, np.array(closest_norm).reshape(-1,2)))
-  plt.imshow(mask)
-  plt.plot(act_pt[0], act_pt[1], 'ro', markersize=3, label= "Actual")
-  plt.plot(pred_pt[0], pred_pt[1], 'bo', markersize=3, label = "Predicted")
-  plt.plot(closest[0], closest[1], 'mo', markersize=3, label = "Closest Predicted")
-  plt.plot(closest_act[0], closest_act[1], 'go', markersize=3, label = "Closest Actual")
-  plt.legend()
-  plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\lstm_predictions\{video}\{frame}.png")
-  plt.close()
-  print(f"Saved image for frame {frame}")
-print(f"Correct: {correct} | Wrong: {wrong} | Accuracy: {correct/(correct+wrong)}")
+if TESTING:
+  total_frames = len(act_seq)-head
+  for i in range(head, len(act_seq)):
+    frame = split+i # Actual frame number
+    print(f"Given first {head-1} frames, predict frame: {frame}/{total_frames} | Progress: {round((i-head)/(total_frames-head)*100, 2)}%")
+    
+    act_pt = np.multiply(act_seq[i], [w, h]) # Actual coord for this frame
+    prev_pt = np.multiply(input[i-1], [w, h]) # Previous coord for this frame
+    prev_pt = [int(x) for x in list(prev_pt)]
+    pred = model(torch.tensor(input, dtype=torch.float32))
+    pred_pt = np.multiply(pred[-1].detach(), [w, h]).detach().numpy() # Predicted coord for this frame
+    
+    # Get closest centroid to predicted point
+    img = cv2.cvtColor(cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original\{video}\{frame}.png"), cv2.COLOR_RGB2GRAY)
+    prev_img = cv2.cvtColor(cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original\{video}\{frame-1}.png"), cv2.COLOR_RGB2GRAY)
+    mask = cv2.cvtColor(cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\ground_truth\{video}\{frame}.png"), cv2.COLOR_BGR2GRAY)
+    cnts = find_centroids(mask)
+    closest = get_closest_cent(cnts, pred_pt)
+    closest_act = get_closest_cent(cnts, act_pt)
+
+
+    n = len(cnts)
+    crop_size = 20
+    fig, ax = plt.subplots(1, n)
+    cropped_prev_img = crop_img(prev_img, *prev_pt, crop_size, crop_size)
+    ax[0].imshow(cropped_prev_img)
+    ax[0].set_title("Previous")
+    for i in range(n):
+      cropped_img = crop_img(img, *cnts[i], crop_size, crop_size)
+      ax[i+1].imshow(cropped_img)
+      ax[i+1].set_title(f"Cnt {i}")
+      hst_score = get_color_score(cropped_prev_img, cropped_img)
+      area_score = get_shape_score(cropped_prev_img, cropped_img)
+      print(f"Cnt {i} | HST Score: {hst_score} | Area Score: {area_score}")
+    plt.show()
+
+    if closest_act == closest:
+      correct += 1
+    else:
+      wrong += 1
+    
+    # Add predicted point or add actual point
+    if RESET and reset_num < max_reset:
+      closest_norm = [closest_act[0]/w, closest_act[1]/h]
+      reset_num += 1
+    else:
+      closest_norm = [closest[0]/w, closest[1]/h]
+    input = np.concatenate((input, np.array(closest_norm).reshape(-1,2)))
+
+    act_seq_coords = np.multiply(act_seq[:i], [w, h])
+    act_seqx, act_seqy = act_seq_coords[:i, 0], act_seq_coords[:i][:, 1]
+    pred_coords = np.multiply(input[:i], [w, h])
+    predx, predy = pred_coords[:i, 0], pred_coords[:i, 1]
+
+    plt.imshow(img, cmap='gray')
+    plt.plot(act_pt[0], act_pt[1], 'ro', markersize=3, label= "Actual")
+    plt.plot(pred_pt[0], pred_pt[1], 'bo', markersize=3, label = "Predicted")
+    plt.plot(closest[0], closest[1], 'mo', markersize=3, label = "Closest Predicted")
+    plt.plot(closest_act[0], closest_act[1], 'go', markersize=3, label = "Closest Actual")
+    plt.scatter(act_seqx, act_seqy, c=np.arange(len(act_seqx)), cmap='Greens', s = 3, label="Input")
+    plt.colorbar()
+    plt.scatter(predx, predy, c= np.arange(len(predx)), cmap='Oranges', s = 3, label="Input")
+    plt.colorbar()
+    plt.legend()
+    # plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\lstm_pred\{video}\{frame}.png")
+    plt.close()
+    print(f"Saved image for frame {frame}")
+
+  print(f"Correct: {correct} | Wrong: {wrong} | Accuracy: {correct/(correct+wrong)}")

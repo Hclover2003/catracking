@@ -31,30 +31,7 @@ if __name__ == '__main__':
     import wandb
     import random
     import torch
-
-    class FocalLoss(nn.Module):
-        
-        def __init__(self, weight=None, 
-                    gamma=2., reduction='none'):
-            nn.Module.__init__(self)
-            self.weight = weight
-            self.gamma = gamma
-            self.reduction = reduction
-            
-        def forward(self, input_tensor, target_tensor):
-            log_prob = F.log_softmax(input_tensor, dim=-1)
-            print(log_prob)
-            prob = torch.exp(log_prob)
-            print(prob)
-            print(log_prob.shape, prob.shape)
-            print(((1 - prob) ** self.gamma) * log_prob)
-            return F.nll_loss(
-                ((1 - prob) ** self.gamma) * log_prob, 
-                target_tensor, 
-                weight=self.weight,
-                reduction = self.reduction
-            )
-
+    import time
 
     ## DEFINE UNET MODEL
 
@@ -68,6 +45,7 @@ if __name__ == '__main__':
     y_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\test"
 
     height, width = cv2.imread(os.path.join(x_train_dir, os.listdir(x_train_dir)[0])).shape[:2]
+
     # Get train and val dataset instances
     train_dataset = CaImagesDataset(
         x_train_dir, y_train_dir, 
@@ -82,17 +60,18 @@ if __name__ == '__main__':
         image_dim = (width, height)
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=12)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=8)
     valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False, num_workers=4)
     print("Data loaders created.")
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     TRAINING = True
-    TESTING = False
+    NEW = False
+    TESTING = True
 
     if TRAINING:
         lr = 0.001
-        epochs = 5
+        epochs = 3
         # start a new wandb run to track this script
         wandb.init(
             # set the wandb project where this run will be logged
@@ -106,23 +85,29 @@ if __name__ == '__main__':
             "epochs": epochs,
             }
         )
-        model = UNet()
+        if NEW:
+            model = UNet()
+        else:
+            model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model5_full.pkl") # load model
+        class_labels = {
+        0: "background",
+        1: "calcium",
+        }
+
         print("Starting training...")
-        # criterion = torch.nn.BCEWithLogitsLoss()
+        start = time.time()
         alpha = 0.25
         gamma = 2
         criterion = torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(),lr=lr)
         loss_list = [] # train and valid logs
+        table = wandb.Table(columns=['ID', 'Image'])
+
         for epoch in range(epochs):
             for i, data in enumerate(train_loader):
                 print("Progress: {:.2%}".format(i/len(train_loader)))
                 inputs, labels = data
                 pred = model(inputs)
-                print(pred.shape, labels.shape)
-                pred = pred.squeeze(1)
-                labels = labels.squeeze(1)
-                print(pred.shape, labels.shape)
                 bce_loss = criterion(pred, labels) # calculate loss (binary cross entropy)
                 p_t = torch.exp(-bce_loss)
                 focal_loss = alpha* (1 - p_t) ** gamma * bce_loss
@@ -132,50 +117,50 @@ if __name__ == '__main__':
                 print(f"Step: {i}, Loss: {loss}")
                 loss_list.append(loss)
                 wandb.log({"loss": loss})
+                mask_img = wandb.Image(inputs[0].squeeze(0).numpy(), 
+                                       masks = {
+                                           "predictions" : {
+                                "mask_data" : np.argmax(pred[0].detach(), 0).numpy(),
+                                "class_labels" : class_labels
+                            },
+                            "ground_truth" : {
+                                "mask_data" : labels[0][1].numpy(),
+                                "class_labels" : class_labels
+                            }}
+                )
+            
+                table.add_data(f"Epoch {epoch} Step {i}", mask_img)
             print(f"Epoch: {epoch}, Loss: {loss}")
-        joblib.dump(model, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model2_full.pkl")
+            print(f"Time elapsed: {time.time() - start} seconds")
+        print(f"Total time: {time.time() - start} seconds")
+        wandb.log({"Table" : table})
+        joblib.dump(model, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model6_full.pkl")
         wandb.finish()
         try:
-            joblib.dump(loss_list, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\loss_list2_full.pkl")
+            joblib.dump(loss_list, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\loss_list6_full.pkl")
         except:
             print("Failed to save loss list")
 
 
     if TESTING:
-        model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model2_full.pkl")
+        model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model5_full.pkl")
         image, gt_mask = train_dataset[2] # image and ground truth from test dataset
-        print(image.shape, gt_mask.shape)
+        print(image.shape, gt_mask.shape) # [1, 512, 512] and [2, 512, 512]
         print(image)
         suffix = "_1"
         plt.imshow(image.squeeze(0).numpy(), cmap='gray')
         plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test{suffix}.png")
         plt.show()
-        plt.imshow(gt_mask.squeeze(0).numpy(), cmap='gray')
+        plt.imshow(gt_mask[1].numpy(), cmap="gray")
         plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_gt{suffix}.png")
         plt.show()
         x_tensor = image.to(DEVICE).unsqueeze(0)
-        pred_mask = model(x_tensor)
-        pred_mask = nn.Sigmoid()(pred_mask)
-        print(pred_mask.max())
-        print(pred_mask.min())
-        # pred_mask[pred_mask < 0.5] = 0
-        # pred_mask[pred_mask >= 0.5] = 1
-        print(pred_mask)
+        pred_mask = model(x_tensor) # [1, 2, 512, 512]
         print(pred_mask.shape)
-        plt.imshow(pred_mask.detach().numpy().squeeze(0).squeeze(0))
+        pred_mask_binary = np.argmax(pred_mask.squeeze(0).detach(), 0)
+        plt.imshow(pred_mask_binary.numpy(), cmap="gray")
         plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred{suffix}.png")
         plt.show()
-        plt.imshow(pred_mask.detach().numpy().squeeze(0).squeeze(0), cmap="gray")
-        plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred_gray{suffix}.png")
-        plt.show()
-        plt.imshow(TF.invert(pred_mask).detach().numpy().squeeze(0).squeeze(0), cmap="gray")
-        plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred_gray_invert{suffix}.png")
-        plt.show()
-        plt.imshow(TF.invert(pred_mask).detach().numpy().squeeze(0).squeeze(0))
-        plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results\unet\test_pred_invert{suffix}.png")
-        plt.show()
-
-
     exit()
 
     LOAD = False # True if loading a model, False if creating a new model

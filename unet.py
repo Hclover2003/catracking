@@ -60,18 +60,18 @@ if __name__ == '__main__':
         image_dim = (width, height)
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=8)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=12)
     valid_loader = DataLoader(valid_dataset, batch_size=1, shuffle=False, num_workers=4)
     print("Data loaders created.")
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     TRAINING = True
-    NEW = False
+    NEW = True
     TESTING = True
 
     if TRAINING:
         lr = 0.001
-        epochs = 3
+        epochs = 2
         # start a new wandb run to track this script
         wandb.init(
             # set the wandb project where this run will be logged
@@ -88,7 +88,7 @@ if __name__ == '__main__':
         if NEW:
             model = UNet()
         else:
-            model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model5_full.pkl") # load model
+            model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model8_full.pkl") # load model
         class_labels = {
         0: "background",
         1: "calcium",
@@ -97,7 +97,7 @@ if __name__ == '__main__':
         print("Starting training...")
         start = time.time()
         alpha = 0.25
-        gamma = 2
+        gamma = 3
         criterion = torch.nn.BCEWithLogitsLoss()
         optimizer = torch.optim.Adam(model.parameters(),lr=lr)
         loss_list = [] # train and valid logs
@@ -117,27 +117,36 @@ if __name__ == '__main__':
                 print(f"Step: {i}, Loss: {loss}")
                 loss_list.append(loss)
                 wandb.log({"loss": loss})
-                mask_img = wandb.Image(inputs[0].squeeze(0).numpy(), 
+
+            for i, data in enumerate(valid_loader):
+                valid_inputs, valid_labels = data
+                valid_pred = model(valid_inputs)
+                bce_loss = criterion(valid_pred, valid_labels) # calculate loss (binary cross entropy)
+                p_t = torch.exp(-bce_loss)
+                focal_loss = alpha* (1 - p_t) ** gamma * bce_loss
+                valid_loss = focal_loss.mean()
+                mask_img = wandb.Image(valid_inputs[0].squeeze(0).numpy(), 
                                        masks = {
                                            "predictions" : {
-                                "mask_data" : np.argmax(pred[0].detach(), 0).numpy(),
+                                "mask_data" : np.argmax(valid_pred[0].detach(), 0).numpy(),
                                 "class_labels" : class_labels
                             },
                             "ground_truth" : {
-                                "mask_data" : labels[0][1].numpy(),
+                                "mask_data" : valid_labels[0][1].numpy(),
                                 "class_labels" : class_labels
                             }}
                 )
-            
                 table.add_data(f"Epoch {epoch} Step {i}", mask_img)
-            print(f"Epoch: {epoch}, Loss: {loss}")
+                wandb.log({"valid_loss": valid_loss})
+
+            print(f"Epoch: {epoch} | Loss: {loss} | Valid Loss: {valid_loss}")
             print(f"Time elapsed: {time.time() - start} seconds")
         print(f"Total time: {time.time() - start} seconds")
         wandb.log({"Table" : table})
-        joblib.dump(model, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model6_full.pkl")
+        joblib.dump(model, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model_1_full.pkl")
         wandb.finish()
         try:
-            joblib.dump(loss_list, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\loss_list6_full.pkl")
+            joblib.dump(loss_list, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\loss_list_1_full.pkl")
         except:
             print("Failed to save loss list")
 

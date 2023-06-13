@@ -3,42 +3,8 @@ import cv2
 import os
 import numpy as np;
 import matplotlib.pyplot as plt
-import natsort
-    # import packages
-import cv2
-import os
-import numpy as np;
-import matplotlib.pyplot as plt
 import shutil
-
-def save_imgs(imgs, save_dir):
-    channel=0
-    for frame in range(0, imgs.shape[0]):
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-        plt.imsave(rf"{save_dir}\{frame}.png", imgs[frame, channel, :, :])
-        print(f"{'{0:.2f}'.format(frame/imgs.shape[0])} Progress: Saved {frame}/{imgs.shape[0]} images")
-
-def get_blobs_adaptive(img, bound_size, min_brightness_const, min_area):
-    new_img = np.full_like(img, 0)
-    im_gauss = cv2.GaussianBlur(img, (5, 5), 0)
-    thresh = cv2.adaptiveThreshold(im_gauss,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,bound_size,(min_brightness_const))
-    cont, hierarchy = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cont_filtered = []
-    
-    for con in cont: 
-        area = cv2.contourArea(con)
-        if area>min_area:
-            cont_filtered.append(con)    
-    
-    for c in cont_filtered:
-        cv2.drawContours(new_img, [c], -1, 255,-1)
-
-    return new_img, cont_filtered
-def get_blob_img(video, frame):
-    img = cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original\{video}\{frame}.png", cv2.IMREAD_GRAYSCALE)
-    thres, blob_img = get_blobs_adaptive(img, bound_size=11, min_brightness_const=-5, min_area=10)
-    return blob_img
+# import natsort
 
 def save_imgs(imgs, save_dir):
     channel=0
@@ -119,12 +85,17 @@ def save_og_ground(save_dir, frame, label, save_x_dir, save_y_dir):
     plt.imsave(f"{save_x_dir}/{label}.png", img) # save original image (feature)
     # plt.imsave(f"{save_y_dir}/{label}.png", blob_img, cmap="gray") # save segmented image (label)
 
+skip = 27
+save_dir = r'C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\valid'
+load_dir = r'C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data\ground_truth\valid'
+files = [f for f in os.listdir(load_dir) if os.path.isfile(os.path.join(load_dir, f))]
+selected_files = [files[i] for i in range(0, len(files), skip)]
+print(len(selected_files))
+for file_name in selected_files:
+    shutil.copy(f'{load_dir}\{file_name}', f'{save_dir}\{file_name}')
+    print(f"Saved {file_name} to {save_dir} from {load_dir}")
 
-SAVEOG = True
-SAVEUNET = False
-SAVEUNETMOVE = False
-videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415']
-
+exit()
 # file_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lst" # change to your directory
 video_num = "11409" # change to video num 
 videos = ['11409', "11410", '11411', '11413', '11414', '11415', '11433', '11434']
@@ -220,7 +191,6 @@ if traintestvalid:
         print(f"Done video {video}!")
     print("Done all videos!")
                 
-
 
 
 

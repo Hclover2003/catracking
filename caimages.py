@@ -9,6 +9,7 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import torch 
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import segmentation_models_pytorch as smp
 import albumentations as album
@@ -81,9 +82,14 @@ class CaImagesDataset(torch.utils.data.Dataset):
                                         padding_mode='edge'))
         _transform.append(transforms.Resize(interpolation=transforms.InterpolationMode.NEAREST_EXACT,size=(img_size, img_size)))  
         mask = transforms.Compose(_transform)(mask)
-        image = transforms.Compose(_transform)(image)
+
+        ont_hot_mask = F.one_hot(mask.long(), num_classes=2).squeeze().permute(2, 0, 1).float()
+
+        _transform_img = _transform.copy()
+        _transform_img.append(transforms.Normalize(mean=[0.5], std=[0.5]))
+        image = transforms.Compose(_transform_img)(image)
             
-        return image, mask
+        return image, ont_hot_mask
         
     def __len__(self):
         # return length of 
@@ -138,7 +144,7 @@ class UpBlock(nn.Module):
 
 class UNet(nn.Module):
     """UNet Architecture"""
-    def __init__(self, out_classes=1, up_sample_mode='conv_transpose'):
+    def __init__(self, out_classes=2, up_sample_mode='conv_transpose'):
         """Initialize the UNet model"""
         super(UNet, self).__init__()
         self.up_sample_mode = up_sample_mode

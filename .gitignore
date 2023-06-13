@@ -17,3 +17,5 @@ unet_results/
 a1.png
 Figure_1.png
 Figuree_1.png
+baseline_results/
+.gitignore

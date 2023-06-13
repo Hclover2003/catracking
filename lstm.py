@@ -99,11 +99,10 @@ def get_color_score(img1, img2):
   score = cv2.compareHist(hst1, hst2, cv2.HISTCMP_CORREL)
   return score
 
-def get_shape_score(img1, img2):
-  area1 = cv2.contourArea(img1)
-  area2 = cv2.contourArea(img2)
-  return area1 - area2
-
+def get_shape_score(cont1, cont2):
+  area1 = cv2.contourArea(cont1)
+  area2 = cv2.contourArea(cont2)
+  return abs(area1 - area2)
 
 
 class CaImagesDataset(Dataset):
@@ -258,41 +257,96 @@ RESET = False
 max_reset = 2
 reset_num = 0
 
+crop_size = 20
+
 if TESTING:
   total_frames = len(act_seq)-head
   for i in range(head, len(act_seq)):
     frame = split+i # Actual frame number
-    print(f"Given first {head-1} frames, predict frame: {frame}/{total_frames} | Progress: {round((i-head)/(total_frames-head)*100, 2)}%")
-    
-    act_pt = np.multiply(act_seq[i], [w, h]) # Actual coord for this frame
-    prev_pt = np.multiply(input[i-1], [w, h]) # Previous coord for this frame
+    print(f"Given first {head-1} frames, predict frame: {frame} of video {video}. Finished {i-head}/{total_frames} Frames | Progress: {round((i-head)/(total_frames)*100, 2)}%")
+
+    # Get previous frame (to compare color & shape)
+    img = cv2.cvtColor(cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original\{video}\{frame}.png"), cv2.COLOR_BGR2GRAY)
+    prev_img = cv2.cvtColor(cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original\{video}\{frame-1}.png"), cv2.COLOR_BGR2GRAY)
+    prev_pt = np.multiply(input[i-1], [w, h])
     prev_pt = [int(x) for x in list(prev_pt)]
+    cropped_prev_img = crop_img(prev_img, *prev_pt, crop_size, crop_size)
+    prev_cont, hierarchy = cv2.findContours(cropped_prev_img, 
+                          cv2.RETR_EXTERNAL, 
+                          cv2.CHAIN_APPROX_SIMPLE)
+    prev_cont = prev_cont[0]
+
+    # Get actual and predicted points
+    act_pt = np.multiply(act_seq[i], [w, h]) # Actual coord for this frame
     pred = model(torch.tensor(input, dtype=torch.float32))
     pred_pt = np.multiply(pred[-1].detach(), [w, h]).detach().numpy() # Predicted coord for this frame
     
     # Get closest centroid to predicted point
-    img = cv2.cvtColor(cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original\{video}\{frame}.png"), cv2.COLOR_RGB2GRAY)
-    prev_img = cv2.cvtColor(cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original\{video}\{frame-1}.png"), cv2.COLOR_RGB2GRAY)
     mask = cv2.cvtColor(cv2.imread(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\ground_truth\{video}\{frame}.png"), cv2.COLOR_BGR2GRAY)
-    cnts = find_centroids(mask)
-    closest = get_closest_cent(cnts, pred_pt)
-    closest_act = get_closest_cent(cnts, act_pt)
-
-
+    cnts, contours = find_centroids(mask)
+    
+    max_pred_score = 10**1000
+    max_act_score = 10**1000
+    cropped_imgs = []
+    dst_scores = []
+    color_scores = []
+    shape_scores = []
     n = len(cnts)
-    crop_size = 20
-    fig, ax = plt.subplots(1, n)
-    cropped_prev_img = crop_img(prev_img, *prev_pt, crop_size, crop_size)
-    ax[0].imshow(cropped_prev_img)
-    ax[0].set_title("Previous")
+
+    # For each centroid, get distance score, color score, and shape score
     for i in range(n):
-      cropped_img = crop_img(img, *cnts[i], crop_size, crop_size)
-      ax[i+1].imshow(cropped_img)
-      ax[i+1].set_title(f"Cnt {i}")
-      hst_score = get_color_score(cropped_prev_img, cropped_img)
-      area_score = get_shape_score(cropped_prev_img, cropped_img)
-      print(f"Cnt {i} | HST Score: {hst_score} | Area Score: {area_score}")
-    plt.show()
+      cnt = cnts[i]
+      cont = contours[i]
+      cropped_img = crop_img(img, *cnt, crop_size, crop_size)
+      cropped_imgs.append(cropped_img)
+
+      dst_score = get_dist_score(*cnt, *pred_pt) # distance between predicted point and centroid
+      act_dst_score = get_dist_score(*cnt, *act_pt) # distance between actual point and centroid
+      hst_score = get_color_score(cropped_prev_img, cropped_img) # color similarity between previous frame and centroid
+      area_score = get_shape_score(prev_cont, cont) # shape similarity between previous frame and centroid
+
+      if dst_score <= max_pred_score:
+        max_pred_score = dst_score
+        closest = cnt
+      if act_dst_score <= max_act_score:
+        max_act_score = act_dst_score
+        closest_act = cnt
+      dst_scores.append(dst_score)
+      color_scores.append(hst_score)
+      shape_scores.append(area_score)
+
+    # Visualize color/shape scores
+    fig, ax = plt.subplots(1, n+4)
+    ax[0].imshow(prev_img)
+    ax[0].plot(prev_pt[0], prev_pt[1], 'ro', markersize=3, label= "Previous")
+    ax[0].set_title(f"Previous Img: Frame {frame-1}")
+    ax[1].imshow(cropped_prev_img) # Plot previous cropped
+    ax[1].set_title("Previous Cropped")
+    ax[2].imshow(img)
+    ax[2].set_title(f"Current Img: Frame {frame}")
+    ax[2].plot(act_pt[0], act_pt[1], 'ro', markersize=3, label= "Actual")
+    ax[2].plot(pred_pt[0], pred_pt[1], 'bo', markersize=3, label = "Predicted")
+    ax[2].plot(closest[0], closest[1], 'mo', markersize=3, label = "Closest Predicted")
+    ax[2].plot(closest_act[0], closest_act[1], 'go', markersize=3, label = "Closest Actual")
+    ax[3].imshow(mask)
+    ax[3].set_title("Mask")
+    for i in range(n):
+      ax[3].plot(cnts[i][0], cnts[i][1], 'ro', markersize=1, label= f"Centroid {i}")
+      ax[i+4].imshow(cropped_imgs[i]) # Plot centroid cropped
+      title = f"Cnt {i}"
+      if cnts[i] == closest:
+        title += " | Pred"
+      if cnts[i] == closest_act:
+        title += " | Act"
+      ax[i+4].set_title(title)
+      ax[i+4].set_xlabel(f"Dst Score: {round(dst_scores[i])} \n HST Score: {round(color_scores[i], 2)} \n Area Score: {round(shape_scores[i])}")
+      print(title + f" | Dst Score: {round(dst_scores[i])} | HST Score: {round(color_scores[i], 2)} | Area Score: {round(shape_scores[i])}")
+    ax[3].legend()
+
+    accuracy = correct/(correct+wrong) if (correct+wrong) != 0 else 0
+    print(f"Correct: {correct} | Wrong: {wrong} | Accuracy: {accuracy}")
+    # plt.show()
+    plt.close()
 
     if closest_act == closest:
       correct += 1
@@ -305,6 +359,7 @@ if TESTING:
       reset_num += 1
     else:
       closest_norm = [closest[0]/w, closest[1]/h]
+    
     input = np.concatenate((input, np.array(closest_norm).reshape(-1,2)))
 
     act_seq_coords = np.multiply(act_seq[:i], [w, h])
@@ -322,7 +377,7 @@ if TESTING:
     plt.scatter(predx, predy, c= np.arange(len(predx)), cmap='Oranges', s = 3, label="Input")
     plt.colorbar()
     plt.legend()
-    # plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\lstm_pred\{video}\{frame}.png")
+    plt.savefig(rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\lstm_pred\{video}\{frame}.png")
     plt.close()
     print(f"Saved image for frame {frame}")
 

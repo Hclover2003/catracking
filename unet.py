@@ -150,7 +150,6 @@ if __name__ == '__main__':
         except:
             print("Failed to save loss list")
 
-
     if TESTING:
         model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model5_full.pkl")
         image, gt_mask = train_dataset[2] # image and ground truth from test dataset

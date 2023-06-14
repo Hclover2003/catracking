@@ -1,30 +1,14 @@
 
-# File Structure
+# File Descriptions
 
-.
-├── data (numpy video and position)/
-│   ├── imgs
-│   └── positions
-├── images (original microscope images)/
-│   ├── original
-│   └── ground_truth
-├── models (trained ML models)/
-│   ├── lstm
-│   └── unet
-├── visualizations(visualizations of predictions + performance)/
-│   ├── lstm
-│   └── unet
-├── results (saved prediction data)/
-│   ├── lstm/
-│   │   ├── 11408 (each try)
-│   │   └── 11409
-│   └── unet
-└── unet_data (images split into train/valid/test)/
-    ├── original/
-    │   ├── train
-    │   ├── valid
-    │   └── test
-    └── ground_truth/
-        ├── train
-        ├── valid
-        └── test
+- `README.md`: This file.
+- ground_truth.py: This file contains code for UNet ground truth generation
+- caimages.py : This file contains function & class definitions for UNet model
+- unet.py: This file contains code for UNet training and testing
+- lstm.py: This file contains code for LSTM training and testing
+
+- data/: This folder contains the data used for training and testing LSTM
+- unet_data/: This folder contains the data used for training and testing UNet
+- images/: This folder contains the images (ground truth and original)
+- models/: This folder contains the trained models
+- results/: This folder contains prediction results and visualizations

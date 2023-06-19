@@ -95,8 +95,6 @@ class CaImagesDataset(torch.utils.data.Dataset):
         # return length of 
         return len(self.image_paths)
 
-
-
 class DoubleConv(nn.Module):
     """(Conv2d -> BN -> ReLU) * 2"""
     def __init__(self, in_channels, out_channels):

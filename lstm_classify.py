@@ -292,6 +292,13 @@ def show_crop_images(img, mask, prev_img, act_pt, pred_pt, prev_pt, cnts, contou
     ax[-1].set_title("Actual Cropped")
     plt.show()
 
+# Set seed (for reproducibility)
+np.random.seed(0)
+random.seed(0)
+torch.manual_seed(0)
+torch.cuda.manual_seed(0)
+os.environ["PYTHONHASHSEED"] = str(0)
+print("Seed set")
 
 # Preprocessing
 data_dir = "/Users/huayinluo/Desktop/code/catracking-1/data"
@@ -324,55 +331,64 @@ for video in videos:
   test_sequences.append(norm_positions[:, split:, :])
 print("Test/Train split complete")
 
+# Set sequence length for consistent array shape
+sequence_length = 200
 
-sequence_length = 2000
 # Create labelled training data (with shuffled sequences)
 train_sequences_with_shuffled = []
 train_labels_with_shuffled = []
 for ava_sequence, avb_sequence in train_sequences:   
     # Add full correct sequence for two neurons
-    train_sequences_with_shuffled.append(ava_sequence[:sequence_length])
-    train_sequences_with_shuffled.append(avb_sequence[:sequence_length])
-   
+    num_full_sequences = math.floor(ava_sequence.shape[0]/sequence_length)
+    for j in range(num_full_sequences):
+      train_sequences_with_shuffled.append(ava_sequence[j*sequence_length:(j+1)*sequence_length])
+      train_labels_with_shuffled.append(np.ones(sequence_length))
+      train_sequences_with_shuffled.append(avb_sequence[j*sequence_length:(j+1)*sequence_length])
+      train_labels_with_shuffled.append(np.zeros(sequence_length))
+    
     shuffled_sequences = []
     # Add shuffled sequences of two neurons
     for i in range(1, sequence_length, 10):
-        # Label for shuffled sequence
+        # Create label with i number of 1s (AVA) and sequence_length-i number of 0s (AVB)
         shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(sequence_length-i)))
-        np.random.shuffle(shuffled_sequence_label)
         
-        # Get coordinate values for shuffled sequence based on labels
-        shuffled_sequence = shuffled_sequence_label.copy()
-        shuffled_sequence = np.expand_dims(shuffled_sequence, axis=1) # add axis
-        shuffled_sequence = np.repeat(shuffled_sequence, 2, axis=1) # repeat for x and y
-        for j in range(sequence_length):
-            # Labels: 1 is AVA, 0 is AVB
-            shuffled_sequence[j] = ava_sequence[j] if shuffled_sequence_label[j] == 1 else avb_sequence[j]
-        
-        # Add shuffled sequence & label to training data
-        train_sequences_with_shuffled.append(shuffled_sequence)
-        train_labels_with_shuffled.append(shuffled_sequence_label)
-        print(f"Added shuffled sequence {i} for video {video}")
+        # Add k random shuffled sequence with that number of AVAs and AVBs
+        for k in range(20):
+          np.random.shuffle(shuffled_sequence_label)
+          shuffled_sequence = shuffled_sequence_label.copy()
+          shuffled_sequence = np.expand_dims(shuffled_sequence, axis=1) # add axis
+          shuffled_sequence = np.repeat(shuffled_sequence, 2, axis=1) # repeat for x and y
+          for j in range(sequence_length):
+              # Labels: 1 is AVA, 0 is AVB
+              shuffled_sequence[j] = ava_sequence[j] if shuffled_sequence_label[j] == 1 else avb_sequence[j]
+          
+          # Add shuffled sequence & label to training data
+          train_sequences_with_shuffled.append(shuffled_sequence)
+          train_labels_with_shuffled.append(shuffled_sequence_label)
+          print(f"Added shuffled sequence {i} for video {video}")
 
 print(f"Train sequences: {len(train_sequences_with_shuffled)}")
 train_sequences_with_shuffled = np.stack(train_sequences_with_shuffled)
 train_labels_with_shuffled = np.stack(train_labels_with_shuffled)
 
+# Create labelled testing data (with shuffled sequences)
 test_sequences_with_shuffled = []
 test_labels_with_shuffled = []
+test_sequence_length = 200 # Test sequences are shorter
 for ava_sequence, avb_sequence in test_sequences:   
-    sequence_length = len(ava_sequence)
-    test_sequences_with_shuffled.append(ava_sequence)
-    test_sequences_with_shuffled.append(avb_sequence)
+    test_sequences_with_shuffled.append(ava_sequence[:test_sequence_length])
+    test_labels_with_shuffled.append(np.ones(test_sequence_length))
+    test_sequences_with_shuffled.append(avb_sequence[:test_sequence_length])
+    test_labels_with_shuffled.append(np.zeros(test_sequence_length))
 
     shuffled_sequences = []
-    for i in range(1, sequence_length, 10):
-        shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(sequence_length-i)))
+    for i in range(1, test_sequence_length, 10):
+        shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(test_sequence_length-i)))
         np.random.shuffle(shuffled_sequence_label)
         shuffled_sequence = shuffled_sequence_label.copy()
         shuffled_sequence = np.expand_dims(shuffled_sequence, axis=1) # add axis
         shuffled_sequence = np.repeat(shuffled_sequence, 2, axis=1) # repeat for x and y
-        for j in range(sequence_length):
+        for j in range(test_sequence_length):
             shuffled_sequence[j] = ava_sequence[j] if shuffled_sequence_label[j] == 1 else avb_sequence[j]
         test_sequences_with_shuffled.append(shuffled_sequence)
         test_labels_with_shuffled.append(shuffled_sequence_label)
@@ -380,47 +396,69 @@ print(f"Test sequences: {len(test_sequences_with_shuffled)}")
 test_sequences_with_shuffled = np.stack(test_sequences_with_shuffled)
 test_labels_with_shuffled = np.stack(test_labels_with_shuffled)
 
-model = NeuralNetworkClassifier()
-model_name = "lstm_classifier_1"
 
-epochs = 50
-learning_rate = 0.0001
-batch_size = 16
-criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+TRAINING = True
+TESTING = False
+if TRAINING:
+  # Initialise model and parameters
+  model = NeuralNetworkClassifier()
+  model_name = "lstm_classifier_1"
 
-wandb.init(
-    project="lstm-classify",
-    config={
-    "existing_model": "none",
-    "model_name": model_name,
-    "learning_rate": learning_rate,
-    "epochs": epochs,
-    "batch_size": batch_size,
-    "epochs": epochs,
-    }
-)
+  epochs = 100
+  learning_rate = 0.001
+  batch_size = 16
+  criterion = nn.BCEWithLogitsLoss()
+  optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+  # Initialise wandb
+  wandb.init(
+      project="lstm-classify",
+      config={
+      "existing_model": "none",
+      "model_name": model_name,
+      "learning_rate": learning_rate,
+      "epochs": epochs,
+      "batch_size": batch_size,
+      "epochs": epochs,
+      }
+  )
   
-start_time = time.time()
-for epoch in range(epochs):
-    num_batches = len(train_sequences_with_shuffled) // batch_size
-    for j in range(num_batches - 1):
-        input_sequences = torch.tensor(train_sequences_with_shuffled[j*batch_size:(j+1)*batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-        input_labels = torch.tensor(train_labels_with_shuffled[j*batch_size:(j+1)*batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-        pred = model(input_sequences)
-        loss = criterion(pred.squeeze(2), input_labels)
-        loss.backward()
-        optimizer.step()
-        if j % 10 == 0:
-            print(f"Epoch: {epoch} | Batch: {j} | Loss: {loss}")
-    if epoch % 10 == 0:
-        wandb.log({"loss": loss})
-        test_input_sequences = torch.tensor(test_sequences_with_shuffled[j*batch_size:(j+1)*batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-        test_input_labels = torch.tensor(test_labels_with_shuffled[j*batch_size:(j+1)*batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-        test_pred = model(test_input_sequences)
-        test_loss = criterion(test_pred, input_labels)
-        wandb.log({"valid_loss": test_loss})
-        print(f"Epoch: {epoch} | Loss: {loss} | Valid Loss: {test_loss}")
-    joblib.dump(model, os.path.join(model_dir, model_name))
-print(time.time() - start_time)
-wandb.finish()
+  # Train model
+  start_time = time.time()
+  for epoch in range(epochs):
+      num_batches = len(train_sequences_with_shuffled) // batch_size
+      for j in range(num_batches - 1):
+          input_sequences = torch.tensor(train_sequences_with_shuffled[j*batch_size:(j+1)*batch_size], dtype=torch.float32) # Shape: [N: batch size (16), L: sequence length (2000), H: input dimension (2))]
+          input_labels = torch.tensor(train_labels_with_shuffled[j*batch_size:(j+1)*batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+          pred = model(input_sequences)
+          loss = criterion(pred.squeeze(2), input_labels) # Squeeze to remove dimension of size 1 [N, L, 1] -> [N, L]
+          loss.backward()
+          optimizer.step()
+          if j % 10 == 0:
+              print(f"Epoch: {epoch} | Batch: {j} | Loss: {loss}")
+      if epoch % 10 == 0:
+          wandb.log({"loss": loss})
+          test_input_sequences = torch.tensor(test_sequences_with_shuffled[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+          test_input_labels = torch.tensor(test_labels_with_shuffled[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+          test_pred = model(test_input_sequences)
+          test_loss = criterion(test_pred.squeeze(2), test_input_labels)
+          wandb.log({"valid_loss": test_loss})
+          print(f"Epoch: {epoch} | Loss: {loss} | Valid Loss: {test_loss}")
+      joblib.dump(model, os.path.join(model_dir, model_name))
+      print("Saved Model")
+  print(time.time() - start_time)
+  wandb.finish()
+  
+if TESTING:
+  model_name = "lstm_classifier_1"
+  model = joblib.load(os.path.join(model_dir, model_name))
+  sequence_num = 0
+  train_input_sequence = torch.tensor(train_sequences_with_shuffled[sequence_num], dtype=torch.float32)
+  train_input_label = torch.tensor(train_labels_with_shuffled[sequence_num], dtype=torch.float32)
+  test_input_sequence = torch.tensor(test_sequences_with_shuffled[sequence_num], dtype=torch.float32)
+  test_input_label = torch.tensor(test_labels_with_shuffled[sequence_num], dtype=torch.float32)
+  
+  train_pred = model(train_input_sequence)
+  loss = criterion(train_pred.squeeze(2), train_input_label)
+
+  

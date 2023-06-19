@@ -271,9 +271,9 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 if TRAIN:
   model = joblib.load(os.path.join(model_dir, "lstm_model5e5.pkl"))
-  model_name = "lstm_model5e5.pkl"
+  model_name = "lstm_model5e6.pkl"
   epochs = 1000
-  seq_len = 10
+  seq_len = 20
   lr = 0.000000001
   batch_size = 8
   criterion = nn.MSELoss()
@@ -463,7 +463,6 @@ if PREDICT:
     print(f"Correct: {num_correct} | Wrong: {num_incorrect} | Accuracy: {num_correct/(num_correct+num_incorrect)}")
     
   
-    
 exit()
   
 TESTING = False

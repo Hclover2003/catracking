@@ -20,3 +20,6 @@ Figuree_1.png
 baseline_results/
 .gitignore
 wandb/
+lstm_pred/
+lstm_predictions/
+unet_data_excerpt/

@@ -42,13 +42,14 @@ import time
 import wandb
 import random
 import itertools
+import sys
 
-class CaImagesDataset(Dataset):
-    """CA Images dataset."""
+class CaPositionsDataset(Dataset):
+    """Calcium tracking positions dataset."""
     # load the dataset
     def __init__(self, x, y):
-        self.x = torch.tensor(x,dtype=torch.float32)
-        self.y = torch.tensor(y,dtype=torch.float32)
+        self.x = x
+        self.y = y
 
     # number of samples in the dataset
     def __len__(self):
@@ -63,15 +64,17 @@ class NeuralNetworkClassifier(nn.Module):
     def __init__(self):
         super(NeuralNetworkClassifier,self).__init__()
         self.lstm = nn.LSTM(input_size=2, 
-                            hidden_size=1,
+                            hidden_size=2,
                             bidirectional=False,
                             num_layers=1,
                             batch_first=True
                             )
+        self.fc1 = nn.Linear(2,1)
 
     def forward(self,x):
         output,_status = self.lstm(x)
-        return output
+        output = self.fc1(output)
+        return output.squeeze(1)
 
 def find_centroids(segmented_img: np.ndarray) -> Tuple[List, List]:
   """
@@ -310,7 +313,7 @@ results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
 
 # Save all video positions in dictionary
 videos = ['11408', '11409', "11410", '11411']
-positions_dct={} # Dictionary of video: positions
+positions_dct={} # Dictionary of video: positions (AVA, AVB)
 for video in videos:
   AVA_positions = np.load(os.path.join(position_dir, f"AVA_{video}.mat.npy"))
   AVB_positions = np.load(os.path.join(position_dir, f"AVB_{video}.mat.npy"))
@@ -325,20 +328,21 @@ test_sequences = []
 for video in videos:
   all_positions = positions_dct[video]
   height, width = cv2.imread(f"/Users/huayinluo/Desktop/code/catracking-1/images/original/{video}/0.png").shape[:2]
-  norm_positions = np.multiply(all_positions, [1/width, 1/height])
+  norm_positions = np.multiply(all_positions, [1/width, 1/height]) # Norm positions shape: [Num neurons = 2, Sequence length = 2571, Num coordinates = 2]
   split = math.floor(norm_positions.shape[1]*0.8)
   train_sequences.append(norm_positions[:, :split, :])
   test_sequences.append(norm_positions[:, split:, :])
 print("Test/Train split complete")
 
-# Set sequence length for consistent array shape
-sequence_length = 200
+# Set sequence length to avoid vanishing gradients
+sequence_length = 250
 
 # Create labelled training data (with shuffled sequences)
 train_sequences_with_shuffled = []
 train_labels_with_shuffled = []
-for ava_sequence, avb_sequence in train_sequences:   
-    # Add full correct sequence for two neurons
+
+for ava_sequence, avb_sequence in train_sequences:
+    # Add full correct sequence for two neurons (we have ~8 full sequences per video, total ~32 full sequences)
     num_full_sequences = math.floor(ava_sequence.shape[0]/sequence_length)
     for j in range(num_full_sequences):
       train_sequences_with_shuffled.append(ava_sequence[j*sequence_length:(j+1)*sequence_length])
@@ -346,68 +350,106 @@ for ava_sequence, avb_sequence in train_sequences:
       train_sequences_with_shuffled.append(avb_sequence[j*sequence_length:(j+1)*sequence_length])
       train_labels_with_shuffled.append(np.zeros(sequence_length))
     
-    shuffled_sequences = []
     # Add shuffled sequences of two neurons
-    for i in range(1, sequence_length, 10):
+    for i in range(10, sequence_length-10, 10):
         # Create label with i number of 1s (AVA) and sequence_length-i number of 0s (AVB)
         shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(sequence_length-i)))
         
         # Add k random shuffled sequence with that number of AVAs and AVBs
-        for k in range(20):
+        for k in range(10):
           np.random.shuffle(shuffled_sequence_label)
           shuffled_sequence = shuffled_sequence_label.copy()
           shuffled_sequence = np.expand_dims(shuffled_sequence, axis=1) # add axis
           shuffled_sequence = np.repeat(shuffled_sequence, 2, axis=1) # repeat for x and y
-          for j in range(sequence_length):
+          for w in range(sequence_length):
               # Labels: 1 is AVA, 0 is AVB
-              shuffled_sequence[j] = ava_sequence[j] if shuffled_sequence_label[j] == 1 else avb_sequence[j]
+              shuffled_sequence[w] = ava_sequence[w] if shuffled_sequence_label[w] == 1 else avb_sequence[w]
           
           # Add shuffled sequence & label to training data
           train_sequences_with_shuffled.append(shuffled_sequence)
           train_labels_with_shuffled.append(shuffled_sequence_label)
-          print(f"Added shuffled sequence {i} for video {video}")
-
 print(f"Train sequences: {len(train_sequences_with_shuffled)}")
-train_sequences_with_shuffled = np.stack(train_sequences_with_shuffled)
+train_sequences_with_shuffled = np.stack(train_sequences_with_shuffled) # Combine list of arrays into flat array
 train_labels_with_shuffled = np.stack(train_labels_with_shuffled)
+
+# Create dataloaders
+train_dataset = CaPositionsDataset(train_sequences_with_shuffled, train_labels_with_shuffled)
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+
+# Visualise shuffled sequences
+if False:
+  for i, (sequences, labels) in enumerate(train_loader):
+    sequence = sequences[0].detach().numpy()
+    label = labels[0].detach().numpy()
+    alphas = np.linspace(0.05, 1, sequence.shape[0])
+    alphas.reshape(-1, 1)
+    colours = label.copy()
+    colours_rgb = np.repeat(colours[:, np.newaxis], 3, axis=1)
+    colours_rgb = np.multiply(colours_rgb, (1, 0, 0))
+    colours_rgba = np.column_stack((colours_rgb, alphas))
+    plt.close()
+    plt.scatter(sequence[:, 0], sequence[:, 1], c=colours_rgba)
+    for z in range(20):
+        plt.annotate(z, (sequence[z, 0], sequence[z, 1]))
+    plt.savefig(f"shuffled_sequences/{i}.png")
+    print(f"Saved {i}")
+
 
 # Create labelled testing data (with shuffled sequences)
 test_sequences_with_shuffled = []
 test_labels_with_shuffled = []
-test_sequence_length = 200 # Test sequences are shorter
-for ava_sequence, avb_sequence in test_sequences:   
-    test_sequences_with_shuffled.append(ava_sequence[:test_sequence_length])
+test_sequence_length = 20 # Test sequences are shorter
+for ava_sequence, avb_sequence in test_sequences:
+  # Add full correct sequence for two neurons
+  num_full_sequences = math.floor(ava_sequence.shape[0]/test_sequence_length)
+  for j in range(num_full_sequences):
+    test_sequences_with_shuffled.append(ava_sequence[j*test_sequence_length:(j+1)*test_sequence_length])
     test_labels_with_shuffled.append(np.ones(test_sequence_length))
-    test_sequences_with_shuffled.append(avb_sequence[:test_sequence_length])
+    test_sequences_with_shuffled.append(avb_sequence[j*test_sequence_length:(j+1)*test_sequence_length])
     test_labels_with_shuffled.append(np.zeros(test_sequence_length))
-
-    shuffled_sequences = []
-    for i in range(1, test_sequence_length, 10):
-        shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(test_sequence_length-i)))
+  
+  # Add shuffled sequences of two neurons
+  for i in range((test_sequence_length//2)-10, (test_sequence_length//2)+10):
+      # Create label with i number of 1s (AVA) and sequence_length-i number of 0s (AVB)
+      shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(test_sequence_length-i)))
+      
+      # Add k random shuffled sequence with that number of AVAs and AVBs
+      for k in range(10):
         np.random.shuffle(shuffled_sequence_label)
         shuffled_sequence = shuffled_sequence_label.copy()
         shuffled_sequence = np.expand_dims(shuffled_sequence, axis=1) # add axis
         shuffled_sequence = np.repeat(shuffled_sequence, 2, axis=1) # repeat for x and y
-        for j in range(test_sequence_length):
-            shuffled_sequence[j] = ava_sequence[j] if shuffled_sequence_label[j] == 1 else avb_sequence[j]
+        for w in range(test_sequence_length):
+            # Labels: 1 is AVA, 0 is AVB
+            shuffled_sequence[w] = ava_sequence[w] if shuffled_sequence_label[w] == 1 else avb_sequence[w]
+        
+        # Add shuffled sequence & label to training data
         test_sequences_with_shuffled.append(shuffled_sequence)
         test_labels_with_shuffled.append(shuffled_sequence_label)
+        print(f"Added shuffled sequence {i} for video {video}")
+
 print(f"Test sequences: {len(test_sequences_with_shuffled)}")
 test_sequences_with_shuffled = np.stack(test_sequences_with_shuffled)
 test_labels_with_shuffled = np.stack(test_labels_with_shuffled)
 
 
-TRAINING = True
-TESTING = False
+test_dataset = CaPositionsDataset(test_sequences_with_shuffled, test_labels_with_shuffled)
+test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
+
+TRAINING = True # Set to True if training model
+TESTING = False # Set to True if testing model
+
 if TRAINING:
   # Initialise model and parameters
   model = NeuralNetworkClassifier()
-  model_name = "lstm_classifier_1"
+  model_name = "lstm_classifier_2"
 
   epochs = 100
-  learning_rate = 0.001
+  learning_rate = 0.0001
   batch_size = 16
   criterion = nn.BCEWithLogitsLoss()
+  alpha = 0.25
+  gamma = 2
   optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
   # Initialise wandb
@@ -418,47 +460,48 @@ if TRAINING:
       "model_name": model_name,
       "learning_rate": learning_rate,
       "epochs": epochs,
-      "batch_size": batch_size,
-      "epochs": epochs,
+      "batch_size": batch_size
       }
   )
   
   # Train model
   start_time = time.time()
   for epoch in range(epochs):
-      num_batches = len(train_sequences_with_shuffled) // batch_size
-      for j in range(num_batches - 1):
-          input_sequences = torch.tensor(train_sequences_with_shuffled[j*batch_size:(j+1)*batch_size], dtype=torch.float32) # Shape: [N: batch size (16), L: sequence length (2000), H: input dimension (2))]
-          input_labels = torch.tensor(train_labels_with_shuffled[j*batch_size:(j+1)*batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-          pred = model(input_sequences)
-          loss = criterion(pred.squeeze(2), input_labels) # Squeeze to remove dimension of size 1 [N, L, 1] -> [N, L]
-          loss.backward()
-          optimizer.step()
-          if j % 10 == 0:
-              print(f"Epoch: {epoch} | Batch: {j} | Loss: {loss}")
-      if epoch % 10 == 0:
-          wandb.log({"loss": loss})
-          test_input_sequences = torch.tensor(test_sequences_with_shuffled[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-          test_input_labels = torch.tensor(test_labels_with_shuffled[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-          test_pred = model(test_input_sequences)
-          test_loss = criterion(test_pred.squeeze(2), test_input_labels)
-          wandb.log({"valid_loss": test_loss})
-          print(f"Epoch: {epoch} | Loss: {loss} | Valid Loss: {test_loss}")
+    # Go through batches
+    for i, (input_sequences, input_labels) in enumerate(train_loader):
+      
+      pred_labels = model(torch.tensor(input_sequences, dtype=torch.float32))
+      pred_labels = pred_labels.squeeze(2) # Remove dimension of size 1 [Batch size, Sequence length, 1] -> [Batch size, Seqeuence length]
+      loss = criterion(pred_labels, torch.tensor(input_labels, dtype=torch.float32))
+      # p_t = torch.exp(-bce_loss)
+      # focal_loss = alpha* (1 - p_t) ** gamma * bce_loss
+      # loss = focal_loss.mean()
+      loss.backward()
+      optimizer.step()
+    # Log losses to wandb
+    if epoch % 10 == 0:
+      wandb.log({"loss": loss})
+      test_input_sequences = torch.tensor(test_sequences_with_shuffled[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+      test_input_labels = torch.tensor(test_labels_with_shuffled[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+      test_pred = model(test_input_sequences)
+      test_loss = criterion(test_pred.squeeze(2), test_input_labels)
+      # p_t = torch.exp(-bce_test_loss)
+      # focal_loss = alpha* (1 - p_t) ** gamma * bce_test_loss
+      # test_loss = focal_loss.mean()
+      wandb.log({"valid_loss": test_loss})
+      print(f"Epoch: {epoch} | Loss: {loss} | Valid Loss: {test_loss}")
       joblib.dump(model, os.path.join(model_dir, model_name))
       print("Saved Model")
   print(time.time() - start_time)
   wandb.finish()
   
 if TESTING:
-  model_name = "lstm_classifier_1"
+  model_name = "lstm_classifier_2"
   model = joblib.load(os.path.join(model_dir, model_name))
-  sequence_num = 0
-  train_input_sequence = torch.tensor(train_sequences_with_shuffled[sequence_num], dtype=torch.float32)
-  train_input_label = torch.tensor(train_labels_with_shuffled[sequence_num], dtype=torch.float32)
-  test_input_sequence = torch.tensor(test_sequences_with_shuffled[sequence_num], dtype=torch.float32)
-  test_input_label = torch.tensor(test_labels_with_shuffled[sequence_num], dtype=torch.float32)
   
-  train_pred = model(train_input_sequence)
-  loss = criterion(train_pred.squeeze(2), train_input_label)
+  criterion = nn.BCEWithLogitsLoss()
+  for i, (input_sequence, input_label) in enumerate(test_loader):
+    test_pred = model(input_sequence)
+    loss = criterion(test_pred.squeeze(2), input_label)
 
   

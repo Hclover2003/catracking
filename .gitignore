@@ -21,3 +21,6 @@ baseline_results/
 .gitignore
 wandb/
 shuffled_sequences/
+lstm_pred/
+lstm_predictions/
+unet_data_excerpt/

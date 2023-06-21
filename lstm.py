@@ -245,7 +245,7 @@ results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
 
 
 # Save all video arrays and positions in dictionary
-videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415']
+videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415', '11433', '11434']
 imgs_dct = {}
 positions_dct={}
 for video in videos:
@@ -270,11 +270,11 @@ TRAIN = True
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 if TRAIN:
-  model = joblib.load(os.path.join(model_dir, "lstm_model5e5.pkl"))
-  model_name = "lstm_model5e6.pkl"
-  epochs = 1000
-  seq_len = 20
-  lr = 0.000000001
+  model = joblib.load(os.path.join(model_dir, "lstm_model5A.pkl"))
+  model_name = "lstm_model5B.pkl"
+  epochs = 300000
+  seq_len = 250
+  lr = 0.000001
   batch_size = 8
   criterion = nn.MSELoss()
   optimizer = torch.optim.Adam(model.parameters(), lr=lr)

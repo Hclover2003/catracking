@@ -43,6 +43,7 @@ import wandb
 import random
 import itertools
 import sys
+from matplotlib.animation import FuncAnimation
 
 class CaPositionsDataset(Dataset):
     """Calcium tracking positions dataset."""
@@ -322,7 +323,7 @@ img_dir = "/Users/huayinluo/Desktop/code/catracking-1/images"
 results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
 
 # Save all video positions in dictionary
-videos = ['11408', '11409', "11410", '11411']
+videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415', '11433', '11434']
 positions_dct={} # Dictionary of video: positions (AVA, AVB)
 for video in videos:
   AVA_positions = np.load(os.path.join(position_dir, f"AVA_{video}.mat.npy"))
@@ -331,6 +332,20 @@ for video in videos:
   positions_dct[video] = all_neurons_positions
   print(f"Loading {video}...")
 print(f"Finished loading images and positions: {len(positions_dct)} positions")
+
+
+# Visualize position difference between AVA and AVB for video
+# video = "11409"
+# ava, avb = positions_dct[video]
+# colours = np.arange(ava.shape[0])
+# for i in range(ava.shape[0]):
+#   plt.scatter(ava[:i, 0], ava[:i, 1], c=colours[:i], cmap="Greens", label="AVA")
+#   plt.scatter(avb[:i, 0], avb[:i, 1], c=colours[:i], cmap="Oranges", label="AVB")
+#   plt.legend()
+#   plt.savefig(os.path.join("positionsab", video, f"{i}.png"))
+#   print(f"Saved {i}")
+#   plt.close()
+
 
 # Original data test/train split (# Add 80% of each video to training set, 20% to testing set)
 train_sequences = []
@@ -344,15 +359,14 @@ for video in videos:
   test_sequences.append(norm_positions[:, split:, :])
 print("Test/Train split complete")
 
-# Set sequence length to avoid vanishing gradients
+# Set sequence length to 250 to avoid vanishing gradients
 sequence_length = 250
 
 # Create labelled training data (with shuffled sequences)
 train_sequences_with_shuffled = []
 train_labels_with_shuffled = []
-
 for ava_sequence, avb_sequence in train_sequences:
-    # Add full correct sequence for two neurons (we have ~8 full sequences per video, total ~32 full sequences)
+    # Add full correct sequence for two neurons (we have ~8 full sequences per video, total ~56 full sequences)
     num_full_sequences = math.floor(ava_sequence.shape[0]/sequence_length)
     for j in range(num_full_sequences):
       train_sequences_with_shuffled.append(ava_sequence[j*sequence_length:(j+1)*sequence_length])
@@ -366,7 +380,7 @@ for ava_sequence, avb_sequence in train_sequences:
         shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(sequence_length-i)))
         
         # Add k random shuffled sequence with that number of AVAs and AVBs
-        for k in range(10):
+        for k in range(5):
           np.random.shuffle(shuffled_sequence_label)
           shuffled_sequence = shuffled_sequence_label.copy()
           shuffled_sequence = np.expand_dims(shuffled_sequence, axis=1) # add axis
@@ -379,12 +393,9 @@ for ava_sequence, avb_sequence in train_sequences:
           train_sequences_with_shuffled.append(shuffled_sequence)
           train_labels_with_shuffled.append(shuffled_sequence_label)
 print(f"Train sequences: {len(train_sequences_with_shuffled)}")
-train_sequences_with_shuffled = np.stack(train_sequences_with_shuffled) # Combine list of arrays into flat array
+train_sequences_with_shuffled = np.stack(train_sequences_with_shuffled) # Combine list of arrays into array
 train_labels_with_shuffled = np.stack(train_labels_with_shuffled)
 
-# Create dataloaders
-train_dataset = CaPositionsDataset(train_sequences_with_shuffled, train_labels_with_shuffled)
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 
 # Visualise shuffled sequences
 if False:
@@ -437,12 +448,9 @@ for ava_sequence, avb_sequence in test_sequences:
         test_sequences_with_shuffled.append(shuffled_sequence)
         test_labels_with_shuffled.append(shuffled_sequence_label)
         print(f"Added shuffled sequence {i} for video {video}")
-
 print(f"Test sequences: {len(test_sequences_with_shuffled)}")
 test_sequences_with_shuffled = np.stack(test_sequences_with_shuffled)
 test_labels_with_shuffled = np.stack(test_labels_with_shuffled)
-
-
 test_dataset = CaPositionsDataset(test_sequences_with_shuffled, test_labels_with_shuffled)
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
 
@@ -451,16 +459,22 @@ TESTING = False # Set to True if testing model
 
 if TRAINING:
   # Initialise model and parameters
-  model = NeuralNetworkClassifier()
-  model_name = "lstm_classifier_2"
+  model = joblib.load(os.path.join(model_dir, "lstm_classifier_5.pkl"))
+  model_name = "lstm_classifier_5.pkl"
 
-  epochs = 100
-  learning_rate = 0.0001
+  epochs = 500
+  learning_rate = 0.00001
   batch_size = 16
   criterion = nn.BCEWithLogitsLoss()
   alpha = 0.25
   gamma = 2
   optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+  print(f"Training model {model_name}")
+  print(f"Learning rate: {learning_rate} | Epochs: {epochs} | Batch size: {batch_size}")
+  # Create dataloaders
+  train_dataset = CaPositionsDataset(train_sequences_with_shuffled, train_labels_with_shuffled)
+  train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
   # Initialise wandb
   wandb.init(
@@ -471,7 +485,7 @@ if TRAINING:
       "learning_rate": learning_rate,
       "epochs": epochs,
       "batch_size": batch_size,
-      "number of training sequences": len(train_sequences_with_shuffled),
+      "number of training sequences": len(train_sequences_with_shuffled)
       }
   )
   

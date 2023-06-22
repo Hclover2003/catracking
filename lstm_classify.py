@@ -304,6 +304,16 @@ torch.cuda.manual_seed(0)
 os.environ["PYTHONHASHSEED"] = str(0)
 print("Seed set")
 
+
+data_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data"
+video_dir = rf"{data_dir}\imgs"
+position_dir = rf"{data_dir}\positions"
+
+model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\lstm"
+img_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images"
+results_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results"
+
+
 # Preprocessing
 data_dir = "/Users/huayinluo/Desktop/code/catracking-1/data"
 video_dir = os.path.join(data_dir, "imgs")
@@ -365,7 +375,7 @@ for ava_sequence, avb_sequence in train_sequences:
       train_labels_with_shuffled.append(np.zeros(sequence_length))
     
     # Add shuffled sequences of two neurons
-    for i in range(10, sequence_length-10, 10):
+    for i in range(10, sequence_length-10, 2):
         # Create label with i number of 1s (AVA) and sequence_length-i number of 0s (AVB)
         shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(sequence_length-i)))
         

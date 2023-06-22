@@ -270,9 +270,9 @@ TRAIN = True
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 if TRAIN:
-  model = joblib.load(os.path.join(model_dir, "lstm_model5A.pkl"))
-  model_name = "lstm_model5B.pkl"
-  epochs = 300000
+  model = joblib.load(os.path.join(model_dir, "lstm_model_A.pkl"))
+  model_name = "lstm_model_B.pkl"
+  epochs = 200
   seq_len = 250
   lr = 0.000001
   batch_size = 8
@@ -336,7 +336,8 @@ if TRAIN:
       plt.legend()
       table.add_data(epoch, wandb.Image(fig))
       plt.close()
-  joblib.dump(model, os.path.join(model_dir, model_name))
+      joblib.dump(model, os.path.join(model_dir, model_name))
+      print("Saved model")
   print(time.time() - start_time)
   wandb.log({"predictions": table})
   wandb.finish()

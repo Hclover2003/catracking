@@ -294,6 +294,8 @@ def slice_sequence(sequence: np.array, frame_rate: int) -> np.array:
   indices = [i for i in range(0, len(sequence), frame_rate)]
   return sequence[indices]
 
+
+
 # SET CONSTANTS
 np.random.seed(0)
 random.seed(0)
@@ -302,6 +304,10 @@ torch.cuda.manual_seed(0)
 os.environ["PYTHONHASHSEED"] = str(0)
 print("Seed set")
 
+# Login to wandb
+WANDB_API_KEY = "9623d3970461071fa95cf35f8c34d09b2f3fa223"
+os.environ["WANDB_API_KEY"] = WANDB_API_KEY
+
 data_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data"
 video_dir = rf"{data_dir}\imgs"
 position_dir = rf"{data_dir}\positions"
@@ -309,12 +315,12 @@ model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\lstm"
 img_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images"
 results_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results"
 
-# data_dir = "/Users/huayinluo/Desktop/code/catracking-1/data"
+# data_dir = "/Users/max_video_heightuayinluo/Desktop/code/catracking-1/data"
 # video_dir = os.path.join(data_dir, "imgs")
 # position_dir = os.path.join(data_dir, "positions")
-# model_dir = "/Users/huayinluo/Desktop/code/catracking-1/models/lstm"
-# img_dir = "/Users/huayinluo/Desktop/code/catracking-1/images"
-# results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
+# model_dir = "/Users/max_video_heightuayinluo/Desktop/code/catracking-1/models/lstm"
+# img_dir = "/Users/max_video_heightuayinluo/Desktop/code/catracking-1/images"
+# results_dir = "/Users/max_video_heightuayinluo/Desktop/code/catracking-1/results"
 
 # Loop through videos and get positions
 old_videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415']
@@ -497,7 +503,7 @@ if PREDICT:
     # get image for this frame and previous frame
     img = cv2.cvtColor(cv2.imread(os.path.join(img_dir, f"original/{video}/{frame}.png")), cv2.COLOR_BGR2GRAY)
     prev_img = cv2.cvtColor(cv2.imread(os.path.join(img_dir, f"original/{video}/{frame-1}.png")), cv2.COLOR_BGR2GRAY)
-    prev_position = [int(position) for position in list(np.multiply(chosen_positions_norm[-1], [width, height]))]
+    prev_position = [int(position) for position in list(np.multiply(chosen_positions_norm[-1], [max_video_width, max_video_height]))]
     cropped_prev_img = crop_img(prev_img, *prev_position, crop_size, crop_size)
     prev_contours, hierarchy = cv2.findContours(cropped_prev_img, 
                           cv2.RETR_EXTERNAL, 
@@ -506,7 +512,7 @@ if PREDICT:
 
     # Get actual and predicted points
     pred_positions_norm = model(torch.tensor(chosen_positions_norm, dtype=torch.float32))
-    pred_position = np.multiply(pred_positions_norm[-1].detach(), [width, height]).detach().numpy() # Predicted coord for this frame
+    pred_position = np.multiply(pred_positions_norm[-1].detach(), [max_video_width, max_video_height]).detach().numpy() # Predicted coord for this frame
     predicted_positions = np.concatenate((predicted_positions, np.array(pred_position).reshape(-1,2)))
     actual_position = actual_positions[frame]# Actual coord for this frame
 
@@ -542,7 +548,7 @@ if PREDICT:
         closest_act = centroid
 
     # Chosen position normalized
-    closest_position_norm = [closest[0]/width, closest[1]/height]
+    closest_position_norm = [closest[0]/max_video_width, closest[1]/max_video_height]
           
     if closest_act == closest:
       num_correct += 1
@@ -551,7 +557,7 @@ if PREDICT:
       
       # If incorrect, reset to actual position
       if RESET and num_reset < max_reset:
-        closest_position_norm = [closest_act[0]/width, closest_act[1]/height]
+        closest_position_norm = [closest_act[0]/max_video_width, closest_act[1]/max_video_height]
         num_reset += 1
         print(f"RESET: {num_reset} resets left")
         
@@ -559,7 +565,7 @@ if PREDICT:
     chosen_positions_norm = np.concatenate((chosen_positions_norm, np.array(closest_position_norm).reshape(-1,2)))
 
     # Un-normalized actual positions
-    chosen_positions = np.multiply(chosen_positions_norm, [width, height])
+    chosen_positions = np.multiply(chosen_positions_norm, [max_video_width, max_video_height])
     
     plt.imshow(img, cmap='gray')
     # plt.plot(act_pt[0], act_pt[1], 'ro', markersize=3, label= "Actual")
@@ -591,10 +597,9 @@ if TESTING:
   start_index = 10 # Starting index
 
   video = '11408' # video to test on
-  actual_positions = np.array(df_test_lst[0]) # full actual sequence of video 11408 (normalized)  (use as label y)
+  actual_positions = np.array(test_sequences[0]) # full actual sequence of video 11408 (normalized)  (use as label y)
   chosen_positions = actual_positions[:start_index, :] # running log of predictions (use as feature x)
 
-  height, width = imgs_dct[video].shape[2:]
   split_frame = math.floor(len(positions_dct[video])*0.8) # split that we did for the test set (ie. the first "frame/position" in act_seq is actually frame split (2131) in the original video )
   total_frames = len(actual_positions)-start_index
   
@@ -605,7 +610,7 @@ if TESTING:
     # Get previous frame (to compare color & shape)
     img = cv2.cvtColor(cv2.imread(os.path.join(img_dir, f"original/{video}/{frame}.png")), cv2.COLOR_BGR2GRAY)
     prev_img = cv2.cvtColor(cv2.imread(os.path.join(img_dir, f"original/{video}/{frame-1}.png")), cv2.COLOR_BGR2GRAY)
-    prev_pt = [int(x) for x in list(np.multiply(chosen_positions[i-1], [w, h]))]  # point at previous index in chosen positions, un-normalize it
+    prev_pt = [int(x) for x in list(np.multiply(chosen_positions[i-1], [max_video_width, max_video_height]))]  # point at previous index in chosen positions, un-normalize it
     cropped_prev_img = crop_img(prev_img, *prev_pt, crop_size, crop_size)
     prev_cont, hierarchy = cv2.findContours(cropped_prev_img, 
                           cv2.RETR_EXTERNAL, 
@@ -613,9 +618,9 @@ if TESTING:
     prev_cont = prev_cont[0]
 
     # Get actual and predicted points
-    act_pt = np.multiply(actual_positions[i], [width, height]) # Actual coord for this frame (un-normalize it)
+    act_pt = np.multiply(actual_positions[i], [max_video_width, max_video_height]) # Actual coord for this frame (un-normalize it)
     pred = model(torch.tensor(chosen_positions, dtype=torch.float32))
-    pred_pt = np.multiply(pred[-1].detach(), [width, height]).detach().numpy() # Predicted coord for this frame
+    pred_pt = np.multiply(pred[-1].detach(), [max_video_width, max_video_height]).detach().numpy() # Predicted coord for this frame
     
     # Get centroids and contours from segmented image
     # TODO: in practice, this is where UNet would segment the image
@@ -704,18 +709,18 @@ if TESTING:
     
     # Add predicted point or add actual point
     if RESET and reset_num < max_reset:
-      closest_norm = [closest_act[0]/w, closest_act[1]/h]
+      closest_norm = [closest_act[0]/max_video_width, closest_act[1]/max_video_height]
       reset_num += 1
     else:
-      closest_norm = [closest[0]/w, closest[1]/h]
+      closest_norm = [closest[0]/max_video_width, closest[1]/max_video_height]
     
     # Add chosen position to list
     chosen_positions= np.concatenate((chosen_positions, np.array(closest_norm).reshape(-1,2)))
 
     # Un-normalized actual positions
-    act_seq_coords = np.multiply(actual_positions[:i], [width, height])
+    act_seq_coords = np.multiply(actual_positions[:i], [max_video_width, max_video_height])
     act_seqx, act_seqy = act_seq_coords[:i, 0], act_seq_coords[:i][:, 1]
-    pred_coords = np.multiply(chosen_positions[:i], [width, height])
+    pred_coords = np.multiply(chosen_positions[:i], [max_video_width, max_video_height])
     predx, predy = pred_coords[:i, 0], pred_coords[:i, 1]
 
     plt.imshow(img, cmap='gray')
@@ -754,8 +759,8 @@ if SWEEP:
   # "frame_rate":{"value": 1},
   "num_predict_coords": {"value": 1},
   "batch_size": {"value": 16},
-  "learning_rate": {"value": 0.0001},
-  "epochs": {"value": 1000}
+  "learning_rate": {"value": 0.00001},
+  "epochs": {"value": 500}
   })
 
   sweep_config = {
@@ -774,6 +779,6 @@ if SWEEP:
   wandb.agent(sweep_id, function=lambda: train(train_sequences=train_sequences, 
                                                valid_sequences=test_sequences,
                                                model_dir=model_dir,
-                                               model_name="lstm_predict-A",
+                                               model_name="lstm_predict_B",
                                                create_new_model=False,
                                                ))

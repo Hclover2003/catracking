@@ -773,5 +773,5 @@ if SWEEP:
                                                valid_sequences=test_sequences,
                                                model_dir=model_dir,
                                                model_name="lstm_predict-A",
-                                               create_new_model=True,
-                                               ), count=3)
+                                               create_new_model=False,
+                                               ))

@@ -41,6 +41,7 @@ import joblib
 import time
 import wandb
 import random
+import scipy.io
 
 class CaImagesDataset(Dataset):
     """CA Images dataset."""
@@ -86,7 +87,12 @@ def split_lst(lst: List[Tuple], n: int) -> List[List[Tuple]]:
   List of sequences of length n
   """
   length = len(lst)
-  return [lst[i*n: (i+1)*n] for i in range((length+n-1)//n)]
+  shortened_sequences = []
+  for i in range((length+n-1)//n):
+    short_seq = lst[i*n: (i+1)*n]
+    if len(short_seq) == n:
+      shortened_sequences.append(short_seq)
+  return shortened_sequences
 
 def find_centroids(segmented_img: np.ndarray) -> Tuple[List, List]:
   """
@@ -155,51 +161,86 @@ def get_shape_score(cont1, cont2):
   area2 = cv2.contourArea(cont2)
   return abs(area1 - area2)
 
-def train_epoch(model: NeuralNetwork, train_lst: List[List[Tuple]], valid_lst: List[List[Tuple]] , batch_size, criterion, optimizer):
+def train_epoch(model: NeuralNetwork, 
+                train_sequences: List[List[Tuple]], 
+                valid_sequences: List[List[Tuple]] , 
+                batch_size: int, num_predict_coords: int, sequence_length: int, frame_rate: int,
+                criterion, optimizer):
   """ 
-  Trains model for one epoch
+  Trains model for one epoch. 
 
   Parameters
   ----------
       model (NeuralNetwork): A neural network model with one LSTM layer
-      train_lst (List[List[Tuple]]): List of short sequences of x,y coordinates for training
-      valid_lst (List[List[Tuple]]): List of short sequences of x,y coordinates for validation
+      train_sequences (List[List[Tuple]]): List of short sequences of x,y coordinates for training
+      valid_sequences (List[List[Tuple]]): List of short sequences of x,y coordinates for validation
+      batch_size (int): Batch size (number of sequences to train on at once)
+      num_predict_coords (int): Number of coordinates to predict
+      sequence_length (int): Length of each sequence
+      frame_rate (int): Frame rate of video (sequence interval)
       criterion: Loss function
       optimizer: Optimizer
       
   Returns
   -------
-      avg loss of model for epoch
+      final train loss, final valid loss, and average train loss of model for epoch
+      
   """
-  total_loss = 0 # Total loss for epoch
-  num_batches = len(train_lst)//batch_size # Number of batches for training
+  # Preprocess train sequences
+  # Slice sequences to get desired frame rate
+  train_sequences = [slice_sequence(seq, frame_rate) for seq in train_sequences]
+  # Split sequences to get desired sequence length
+  shortened_train_sequences = []
+  for sequence in train_sequences:
+    shortened_train_sequences.extend(split_lst(sequence, sequence_length))
+  shortened_train_sequences = np.stack(shortened_train_sequences)
+  # Shuffle order of sequences
+  shortened_train_sequences = np.random.permutation(shortened_train_sequences) 
+  
+  # Preprocess valid sequences
+  shortened_valid_sequences = []
+  for sequence in valid_sequences:
+    shortened_valid_sequences.extend(split_lst(sequence, 100))
+  shortened_valid_sequences = np.stack(shortened_valid_sequences)
+  
+  # Number of batches
+  num_batches = len(shortened_train_sequences)//batch_size
+  # Total loss for epoch
+  total_loss = 0
+  
   # Train model
   for i in range(num_batches):
-    train_input = torch.tensor(train_lst[i*batch_size:(i+1)*batch_size][:, :-1, :], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-    pred = model(train_input)
-    actual = torch.tensor(train_lst[i*batch_size:(i+1)*batch_size][:, 1:, :], dtype=torch.float32)
-    loss = criterion(pred, actual)
+    # Get batch of sequences and convert to tensors
+    input_sequences = torch.tensor(shortened_train_sequences[i*batch_size:(i+1)*batch_size][:-num_predict_coords], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+    # Get actual sequences and convert to tensors
+    actual_sequences = torch.tensor(shortened_train_sequences[i*batch_size:(i+1)*batch_size][num_predict_coords:], dtype=torch.float32)
+    # Predict next coordinates
+    pred_sequences = model(input_sequences)
+    # Calculate loss
+    loss = criterion(pred_sequences, actual_sequences)
     total_loss += loss
     loss.backward()
     optimizer.step()
     
-    valid_input = torch.tensor(valid_lst[i:(i+1)][:, :-1, :], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+    # Calculate validation loss
+    valid_input = torch.tensor(shortened_valid_sequences[0][:-1], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+    valid_actual = torch.tensor(shortened_valid_sequences[0][1:], dtype=torch.float32)
     valid_pred = model(valid_input)
-    valid_actual = torch.tensor(valid_lst[i:(i+1)][:, 1:, :], dtype=torch.float32)
     valid_loss = criterion(valid_pred, valid_actual)
-  # Log loss to wandb
+    
+  # Log losses to wandb
   wandb.log({"loss": loss, "valid_loss": valid_loss})
   
   return loss, valid_loss, (total_loss/num_batches)
 
-def train(train_lst: List[List[Tuple]], valid_lst: List[List[Tuple]], config: dict=None):
+def train(train_sequences: List[List[Tuple]], valid_sequences: List[List[Tuple]], model_dir:str, model_name:str, create_new_model: bool, config: dict=None):
   """
   Trains model for multiple epochs and logs to wandb
   
   Parameters
   ----------
-      train_lst (List[List[Tuple]]): List of short sequences of x,y coordinates for training
-      valid_lst (List[List[Tuple]]): List of short sequences of x,y coordinates for validation
+      train_sequences (List[List[Tuple]]): List of short sequences of x,y coordinates for training
+      valid_sequences (List[List[Tuple]]): List of short sequences of x,y coordinates for validation
       config: Hyperparameters (set by wandb sweep)
   
   """
@@ -208,20 +249,50 @@ def train(train_lst: List[List[Tuple]], valid_lst: List[List[Tuple]], config: di
     start = time.time()
     config = wandb.config
     
-    
-    train_lst_shortened = np.concatenate([split_lst(lst, config.seq_len)[:-1] for lst in train_lst])
-    valid_lst_shortened = np.concatenate([split_lst(lst, config.seq_len)[:-1] for lst in valid_lst])
-    model = NeuralNetwork() # New model
+    # Initialize model, loss function, and optimizer
+    if create_new_model:
+      model = NeuralNetwork()
+    else:
+      model = joblib.load(os.path.join(model_dir, "lstm_model5e6.pkl"))
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+    checkpoint_num = 0
     
+    # Create directory for model
+    if not os.path.exists(os.path.join(model_dir, model_name)):
+      os.mkdir(os.path.join(model_dir, model_name))
+    # Train model for multiple epochs
     for epoch in range(config.epochs):
-        avg_loss = train_epoch(model=model, train_lst=train_lst_shortened, valid_lst=valid_lst_shortened, batch_size=config.batch_size, criterion=criterion, optimizer=optimizer)
-        wandb.log({"avg_loss": avg_loss, "epoch": epoch})    
-
-    joblib.dump(model, os.path.join(model_dir, "lstm_model_1.pkl"))
+        train_loss, valid_loss, avg_train_loss = train_epoch(model=model, 
+                               train_sequences=train_sequences,
+                               valid_sequences=valid_sequences, 
+                               batch_size=config.batch_size, 
+                               num_predict_coords=config.num_predict_coords, 
+                               sequence_length=config.sequence_length, 
+                               frame_rate=config.frame_rate,
+                               criterion=criterion, optimizer=optimizer)
+        wandb.log({"avg_train_loss": avg_train_loss, "epoch": epoch, "train_loss": train_loss, "valid_loss": valid_loss})    
+        # Save model every 10 epochs
+        joblib.dump(model, os.path.join(model_dir, model_name, str(checkpoint_num)))
+        checkpoint_num += 1
     print(f"Time: {time.time()-start}")
     wandb.finish()
+
+def slice_sequence(sequence: np.array, frame_rate: int) -> np.array:
+  """
+  Slices sequence into smaller sequences of length frame_rate
+  
+  Parameters
+  ----------
+      sequence (np.array): Sequence of x,y coordinates
+      frame_rate (int): Number of frames per second
+  
+  Returns
+  -------
+      List of sequences of length frame_rate
+  """
+  indices = [i for i in range(0, len(sequence), frame_rate)]
+  return sequence[indices]
 
 # SET CONSTANTS
 np.random.seed(0)
@@ -243,59 +314,102 @@ model_dir = "/Users/huayinluo/Desktop/code/catracking-1/models/lstm"
 img_dir = "/Users/huayinluo/Desktop/code/catracking-1/images"
 results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
 
-
-# Save all video arrays and positions in dictionary
-videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415', '11433', '11434']
-imgs_dct = {}
-positions_dct={}
+# Loop through videos and get positions
+old_videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415']
+new_videos = ['11310', '11311', '11313', '11315', '11316', '11317_1', '11317_2', '11318', '11320_1', '11323', '11325_1', '11325_2', '11327_1', '11327_2', '11328_1']
+videos = old_videos + new_videos
+positions_dct={} 
 for video in videos:
-  imgs_dct[video] = np.load(os.path.join(video_dir, f"{video}_crop.nd2.npy"))
-  positions_dct[video] = np.load(os.path.join(position_dir, f"AVA_{video}.mat.npy"))
+  # Load AVA and AVB positions
+  try:
+    ava = os.path.join(position_dir, f"AVA_{video}.mat")
+    avb = os.path.join(position_dir, f"AVB_{video}.mat")
+    mat_ava = scipy.io.loadmat(ava)
+    mat_avb = scipy.io.loadmat(avb)
+    positions_ava = np.concatenate(mat_ava['dual_position_data'])
+    positions_ava = np.array([list(coord.squeeze(0)) for coord in positions_ava])
+    positions_avb = np.concatenate(mat_avb['dual_position_data'])
+    positions_avb = np.array([list(coord.squeeze(0)) for coord in positions_avb])
+  except:
+    positions_ava = np.load(os.path.join(position_dir, f"AVA_{video}.mat.npy"))
+    positions_avb = np.load(os.path.join(position_dir, f"AVB_{video}.mat.npy"))
+  all_neurons_positions = np.stack((positions_ava, positions_avb))
+  positions_dct[video] = all_neurons_positions
   print(f"Loading {video}...")
-print(f"Finished loading images and positions: {len(imgs_dct)} videos, {len(positions_dct)} positions")
+print(f"Finished loading images and positions: {len(positions_dct)} positions")
 
-# Test/train split (# Add 80% of each video to training set, 20% to testing set)
-df_train_lst = []
-df_test_lst = []
+# Original data test/train split (# Add 80% of each video to training set, 20% to testing set)
+train_sequences = []
+test_sequences = []
+max_video_width = 500
+max_video_height = 570
 for video in videos:
-  positions = positions_dct[video]
-  h, w = imgs_dct[video].shape[2:]
-  norm_positions = [(x/w, y/h) for (x,y) in positions]
-  split = math.floor(len(norm_positions)*0.8)
-  df_train_lst.append(norm_positions[:split])
-  df_test_lst.append(norm_positions[split:])
+  # Normalize positions
+  all_positions = positions_dct[video]
+  norm_positions = np.multiply(all_positions, [1/max_video_width, 1/max_video_height]) # Norm positions shape: [Num neurons = 2, Sequence length = 2571, Num coordinates = 2]
+  split = math.floor(norm_positions.shape[1]*0.8)
+  ava, avb = norm_positions
+  train_sequences.append(ava[:split])
+  train_sequences.append(avb[:split])
+  test_sequences.append(ava[split:])
+  test_sequences.append(avb[split:])
+
 print("Test/Train split complete")
 
-TRAIN = True
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+TRAIN = False
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+CONT_EXISTING_MODEL = True
 if TRAIN:
-  model = joblib.load(os.path.join(model_dir, "lstm_model_A.pkl"))
-  model_name = "lstm_model_B.pkl"
-  epochs = 200
-  seq_len = 250
+  # Continue training existing model or create new model
+  if CONT_EXISTING_MODEL:
+    existing_model = "lstm_model_june23_1.pkl"
+    model = joblib.load(os.path.join(model_dir, existing_model))
+  else:
+    existing_model = "N/A"
+    model = NeuralNetwork()
+    
+  # Set parameters
+  model_name = "lstm_model_june23_1.pkl"
+  epochs = 1000
   lr = 0.000001
+  sequence_length = 250
+  frame_rate = 3
   batch_size = 8
   criterion = nn.MSELoss()
   optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-  df_train_lst_shortened = np.concatenate([split_lst(lst, seq_len)[:-1] for lst in df_train_lst])
-  df_test_lst_shortened = np.concatenate([split_lst(lst, seq_len)[:-1] for lst in df_test_lst])
-  num_batches = len(df_train_lst_shortened)//batch_size
-  print(f"Number of Sequences = {len(df_train_lst_shortened)}, Batch size = {batch_size}, Num batches: {num_batches}")
 
+  # Slice sequence by frame rate
+  train_sequences = [slice_sequence(seq, frame_rate) for seq in train_sequences]
+
+  sequence_length = 250
+  # Split sequences into desired sequence length
+  shortened_train_sequences = []
+  for sequence in train_sequences:
+    shortened_train_sequences.extend(split_lst(sequence, sequence_length))
+  shortened_train_sequences = np.concatenate(shortened_train_sequences)
+
+  shortened_test_sequences = []
+  for sequence in test_sequences:
+    shortened_test_sequences.extend(split_lst(sequence, sequence_length))
+  shortened_test_sequences = np.concatenate(shortened_test_sequences)
+  num_batches = len(shortened_train_sequences)//batch_size
+  print(f"Number of Sequences = {len(shortened_train_sequences)}, Batch size = {batch_size}, Num batches: {num_batches}")
+
+  # Record wandb hyperparameters
   wandb.init(
       project="lstm",
       config={
-        "existing_model": "lstm_model5.pkl",
-        "model_name": model_name,
-        "seq_len": seq_len,
-      "learning_rate": lr,
-      "epochs": epochs,
+      "existing_model": "lstm_model5.pkl",
+      "model_name": model_name,
+      "sequence_length": sequence_length,
+      "frame_rate": frame_rate,
       "batch_size": batch_size,
-      "architecture": "lstm",
-      "dataset": "CIFAR-100",
       "epochs": epochs,
+      "learning_rate": lr,
+      "architecture": "lstm",
+      "dataset": ",".join(videos),
       }
   )
 
@@ -305,30 +419,30 @@ if TRAIN:
   for epoch in range(epochs):
     # Train model
     for j in range(num_batches):
-      train_input = torch.tensor(df_train_lst_shortened[j*batch_size:(j+1)*batch_size][:, :-1, :], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+      train_input = torch.tensor(shortened_train_sequences[j*batch_size:(j+1)*batch_size][:-1], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
       pred = model(train_input)
-      actual = torch.tensor(df_train_lst_shortened[j*batch_size:(j+1)*batch_size][:, 1:, :], dtype=torch.float32)
+      actual = torch.tensor(shortened_train_sequences[j*batch_size:(j+1)*batch_size][1:], dtype=torch.float32)
       loss = criterion(pred, actual)
       loss.backward()
       optimizer.step()
     # Log train and valid loss every 10 epochs
     if epoch % 10 == 0:
       wandb.log({"loss": loss})
-      test_input = torch.tensor(df_test_lst_shortened[0:batch_size][:, :-1, :], dtype=torch.float32)
-      test_actual = torch.tensor(df_test_lst_shortened[0:batch_size][:, 1:, :], dtype=torch.float32)
+      test_input = torch.tensor(shortened_test_sequences[0:batch_size][:-1], dtype=torch.float32)
+      test_actual = torch.tensor(shortened_test_sequences[0:batch_size][1:], dtype=torch.float32)
       test_pred = model(test_input)
       valid_loss = criterion(test_pred, test_actual)
       wandb.log({"valid_loss": valid_loss})
       print(f"Epoch: {epoch} | Loss: {loss} | Valid Loss: {valid_loss}")
-    # Plot valid prediction every 100 epochs
+    # Plot valid prediction and save model every 100 epochs
     if epoch % 100 == 0:
-      colours = np.arange(test_pred.detach()[1].numpy().shape[0])
-      predx = test_pred.detach()[1].numpy()[:,0]
-      predy = test_pred.detach()[1].numpy()[:,1]
-      actx = test_actual.detach()[1][:,0]
-      acty = test_actual.detach()[1][:,1]
+      colours = np.arange(test_pred.detach().shape[0])
+      predx = test_pred.detach()[:,0]
+      predy = test_pred.detach()[:,1]
+      actx = test_actual.detach()[:,0]
+      acty = test_actual.detach()[:,1]
       fig = plt.figure()
-      plt.scatter(test_input.detach()[1].numpy()[0,0], test_input.detach()[1].numpy()[0,1], label="Input")
+      plt.scatter(test_input.detach()[0,0], test_input.detach()[0,1], label="Input")
       plt.scatter(predx, predy, c = colours, cmap="Greens", label="Predicted") #1st sequence in batch
       plt.colorbar()
       plt.scatter(actx, acty, c = colours, cmap = "Oranges", label="Actual") # 1st sequence in batch
@@ -360,7 +474,7 @@ if PREDICT:
   start_frame = 0
   end_frame = 200 # frames 0-100 of video 11408
   start_index = 1 # give first 10 frames as input to model
-  height, width = imgs_dct[video].shape[2:] # dimensions to normalize positions with
+  # height, width = imgs_dct[video].shape[2:] # dimensions to normalize positions with
   crop_size = 20
   
   dst_weight = 10 # Distance score is from [0, infinity]. Closer to 0 is better
@@ -372,7 +486,7 @@ if PREDICT:
   
   # actual positions and chosen positions
   actual_positions = np.array(positions_dct[video][start_frame:end_frame+1]) # full actual sequence of video 11408 (use as label y)
-  actual_positions_norm = np.multiply(actual_positions, [1/width, 1/height])
+  actual_positions_norm = np.multiply(actual_positions, [1/max_video_width, 1/max_video_height])
   chosen_positions_norm = actual_positions_norm[start_frame:start_frame+start_index, :] # running log of chosen coordinates (use as feature x)
   predicted_positions = actual_positions[start_frame:start_frame+start_index, :] # running log of predictions
   
@@ -463,15 +577,11 @@ if PREDICT:
 
     print(f"Correct: {num_correct} | Wrong: {num_incorrect} | Accuracy: {num_correct/(num_correct+num_incorrect)}")
     
-  
-exit()
-  
 TESTING = False
 RESET = False
 max_reset = 2
 reset_num = 0
 crop_size = 20
-
 if TESTING:
   model = joblib.load(os.path.join(model_dir, "lstm_model0.pkl"))
   num_correct = 0
@@ -622,24 +732,32 @@ if TESTING:
 
   print(f"Correct: {num_correct} | Wrong: {num_incorrect} | Accuracy: {num_correct/(num_correct+num_incorrect)}")
   
-SWEEP = False
+  
+SWEEP = True
 if SWEEP:
+  print("Starting sweep...")
   # Sweep config
   parameters_dct = {
-  "seq_len": {"values": [10, 25, 50, 100, 200, 250]},
+  "sequence_length": {"values": [10, 25, 50, 100, 200, 250]},
+  "frame_rate":{"values": [1, 3, 5, 10]},
+  "num_predict_coords": {"values": [1, 2, 3, 4, 5, 10]},
   "batch_size": {"values": [8, 16, 32, 64]},
   "learning_rate": {"max": 0.001, "min": 0.00001},
   "epochs": {"values": [50, 100, 200, 500, 1000, 2000]}
   }
 
+  # Set constant parameters
   parameters_dct.update({
-  "seq_len": {"value": 100},
-  "learning_rate": {"value": 0.001},
-  "batch_size": {"value": 16}
-  }) # Set constant parameters
+  "sequence_length": {"value": 100},
+  # "frame_rate":{"value": 1},
+  "num_predict_coords": {"value": 1},
+  "batch_size": {"value": 16},
+  "learning_rate": {"value": 0.0001},
+  "epochs": {"value": 1000}
+  })
 
   sweep_config = {
-    "method": "random",
+    "method": "grid",
     "name": "sweep",
     "metric": {
       "goal": "minimize",
@@ -648,7 +766,12 @@ if SWEEP:
     "parameters": parameters_dct,
   }
 
-  sweep_id = wandb.sweep(sweep_config, project="lstm-positions")
+  sweep_id = wandb.sweep(sweep_config, project="lstm-predict")
 
   # Run sweep to find hyperparameters
-  wandb.agent(sweep_id, function=lambda: train(train_lst=df_train_lst, valid_lst=df_test_lst), count=3)
+  wandb.agent(sweep_id, function=lambda: train(train_sequences=train_sequences, 
+                                               valid_sequences=test_sequences,
+                                               model_dir=model_dir,
+                                               model_name="lstm_predict-A",
+                                               create_new_model=True,
+                                               ), count=3)

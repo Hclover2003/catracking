@@ -231,21 +231,23 @@ torch.cuda.manual_seed(0)
 os.environ["PYTHONHASHSEED"] = str(0)
 print("Seed set")
 
-# data_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data"
-# model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\lstm"
-# video_dir = rf"{data_dir}\imgs"
-# position_dir = rf"{data_dir}\positions"
+data_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data"
+video_dir = rf"{data_dir}\imgs"
+position_dir = rf"{data_dir}\positions"
+model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\lstm"
+img_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images"
+results_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results"
 
-data_dir = "/Users/huayinluo/Desktop/code/catracking-1/data"
-video_dir = os.path.join(data_dir, "imgs")
-position_dir = os.path.join(data_dir, "positions")
-model_dir = "/Users/huayinluo/Desktop/code/catracking-1/models/lstm"
-img_dir = "/Users/huayinluo/Desktop/code/catracking-1/images"
-results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
+# data_dir = "/Users/huayinluo/Desktop/code/catracking-1/data"
+# video_dir = os.path.join(data_dir, "imgs")
+# position_dir = os.path.join(data_dir, "positions")
+# model_dir = "/Users/huayinluo/Desktop/code/catracking-1/models/lstm"
+# img_dir = "/Users/huayinluo/Desktop/code/catracking-1/images"
+# results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
 
 
 # Save all video arrays and positions in dictionary
-videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415', '11433', '11434']
+videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415', '11416']
 imgs_dct = {}
 positions_dct={}
 for video in videos:
@@ -270,11 +272,12 @@ TRAIN = True
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 if TRAIN:
-  model = joblib.load(os.path.join(model_dir, "lstm_model_A.pkl"))
-  model_name = "lstm_model_B.pkl"
-  epochs = 200
+  model = NeuralNetwork()
+  model = joblib.load(os.path.join(model_dir, "lstm_model_C.pkl"))
+  model_name = "lstm_model_june22.pkl"
+  epochs = 2000000
   seq_len = 250
-  lr = 0.000001
+  lr = 0.00000001
   batch_size = 8
   criterion = nn.MSELoss()
   optimizer = torch.optim.Adam(model.parameters(), lr=lr)

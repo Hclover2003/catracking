@@ -101,6 +101,7 @@ class ImageGallery:
         self.enlarged_mask_canvas = None
         self.thumbnail_images = []
         self.mask_images = []
+        self.tracking = False
 
         self.information_frame = None
         self.frame_label = None
@@ -155,7 +156,7 @@ class ImageGallery:
         # Information - save positions Button
         save_positions_button = tk.Button(self.information_frame, text="Save Positions", font=("Arial", 20))
         save_positions_button.pack(side=tk.TOP, fill=tk.BOTH)
-        save_positions_button.bind("<Button-1>", lambda event: print(self.neuron_positions_dct))
+        save_positions_button.bind("<Button-1>", lambda event: self.stop_tracking() )
 
         # Gallery
         self.gallery_frame = tk.Frame(main_frame)
@@ -201,12 +202,30 @@ class ImageGallery:
         self.load_thumbnail_images()
         print("Hello")
 
+    def stop_tracking(self):
+        """
+        Stop tracking the neuron
+        """
+        self.tracking = False
+        print("Tracking stopped")
+        
+    def start_tracking(self):
+        """
+        Start tracking the neuron
+        """
+        self.tracking = True
+        print("Tracking started")
+        self.track_neuron(self.selected_neuron)
+
     def track_neuron(self, neuron):
         """
         Track the neuron
         """
         print(f"Tracking neuron {neuron}")
         for frame in range(self.current_frame, total_frames):
+            if not self.tracking:
+                print("Tracking stopped")
+                break
             input_positions = self.neuron_positions_dct["AVA"][:frame]
             input_positions_norm = np.multiply(input_positions, [1/video_width, 1/video_height])
             input_positions_norm = torch.tensor(input_positions_norm, dtype=torch.float32)

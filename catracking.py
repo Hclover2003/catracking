@@ -100,6 +100,7 @@ class ImageGallery:
         self.enlarged_image_canvas = None
         self.enlarged_mask_canvas = None
         self.thumbnail_images = []
+        self.mask_images = []
 
         self.information_frame = None
         self.frame_label = None
@@ -166,8 +167,12 @@ class ImageGallery:
 
         # Enlarged Image Frame - enlarged image Canvas
         self.enlarged_image_canvas = tk.Canvas(self.stage, bg="red")
-        # self.enlarged_image_canvas.pack(side=tk.TOP, fill=tk.NONE, expand=False)
-        self.enlarged_image_canvas.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+        self.enlarged_image_canvas.pack(side=tk.LEFT, fill=tk.NONE, expand=False)
+        # self.enlarged_image_canvas.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
+
+        self.enlarged_mask_canvas= tk.Canvas(self.stage, bg="blue")
+        self.enlarged_mask_canvas.pack(side=tk.RIGHT, fill=tk.NONE, expand=False)
+        # self.enlarged_mask_canvas.place(relx=0.9, rely=0.9, anchor=tk.CENTER)
 
         # Enlarged Image Canvas - plot neuron positions and bind mouse click event      
         self.enlarged_image_canvas.bind('<Button 1>', lambda event: self.set_neuron_position_for_frame(self.selected_neuron, np.array((event.x, event.y)), self.current_frame))
@@ -225,7 +230,7 @@ class ImageGallery:
             self.set_current_frame(self.current_frame)
             self.update_neuron_position_labels(self.current_frame)
             self.plot_neuron_positions_for_frame(self.current_frame)
-            self.display_enlarged_image(self.thumbnail_images[self.current_frame][0])
+            self.display_enlarged_image(self.thumbnail_images[self.current_frame][0], self.mask_images[self.current_frame][0])
             # Scroll right to next thumbnail
             thumbnail_x_coord = (thumbnail_size[0])*self.current_frame
             print(f"Thumbnail width: {thumbnail_x_coord}, canvas width: { self.thumbnails_canvas.winfo_width()}, frame width: { self.thumbnails_frame.winfo_width()}")
@@ -242,7 +247,7 @@ class ImageGallery:
             self.set_current_frame(self.current_frame)
             self.update_neuron_position_labels(self.current_frame)
             self.plot_neuron_positions_for_frame(self.current_frame)
-            self.display_enlarged_image(self.thumbnail_images[self.current_frame][0])
+            self.display_enlarged_image(self.thumbnail_images[self.current_frame][0], self.mask_images[self.current_frame][0])
             # Scroll right to next thumbnail
             thumbnail_x_coord = (thumbnail_size[0])*self.current_frame
             print(f"Thumbnail width: {thumbnail_x_coord}, canvas width: { self.thumbnails_canvas.winfo_width()}, frame width: { self.thumbnails_frame.winfo_width()}")
@@ -317,12 +322,12 @@ class ImageGallery:
         image_files.sort(key=lambda f: int(re.sub('\D', '', f)))
 
         for image_file in image_files:
-            image_path = os.path.join(mask_dir, image_file)
+            image_path = os.path.join(image_dir, image_file)
             mask_path = os.path.join(mask_dir, image_file)
             if os.path.isfile(image_path):
                 # Load the image and create a thumbnail
                 frame_num = image_file.split('.')[0]
-                # mask_image = Image.open(mask_path)
+                mask_image = Image.open(mask_path)
                 image = Image.open(image_path)
                 thumbnail = image.copy()
                 thumbnail.thumbnail(thumbnail_size)
@@ -334,12 +339,13 @@ class ImageGallery:
                 thumbnail_label.pack(side=tk.LEFT, padx=5)
 
                 # Bind the label to display the enlarged image
-                thumbnail_label.bind("<Button-1>", lambda event, img=image: self.display_enlarged_image(img))
+                thumbnail_label.bind("<Button-1>", lambda event, img=image, mask=mask_image: self.display_enlarged_image(img))
 
                 # Add the image and its label to the list
                 self.thumbnail_images.append((image, thumbnail_label))
+                self.mask_images.append((mask_image, thumbnail_label))
 
-    def display_enlarged_image(self, image):
+    def display_enlarged_image(self, image, mask_image = None):
         """
         Display the image in the enlarged image label while maintaining aspect ratio and fitting window height
         """
@@ -349,8 +355,10 @@ class ImageGallery:
 
         # Get the size of the image
         image_width, image_height = image.size
+        mask_width, mask_height = mask_image.size
+        print(f"Mask size: {mask_width} x {mask_height}")
         image_tk = ImageTk.PhotoImage(image)
-        # mask_image_tk = ImageTk.PhotoImage(mask_image)
+        mask_image_tk = ImageTk.PhotoImage(mask_image)
         
 
         # # Calculate the aspect ratio of the image
@@ -373,6 +381,9 @@ class ImageGallery:
         # Update the enlarged image label
         self.enlarged_image_canvas.create_image(window_width/2, window_height/2, image=image_tk, anchor=tk.CENTER)
         self.enlarged_image_canvas.image = image_tk
+
+        self.enlarged_mask_canvas.create_image(window_width/2, window_height/2, image=mask_image_tk, anchor=tk.CENTER)
+        self.enlarged_mask_canvas.image = mask_image_tk
 
         image_frame = int(os.path.basename(image.filename).split('.')[0])
         self.set_current_frame(image_frame)

@@ -51,6 +51,37 @@ import wandb
 import random
 import scipy.io
 import re
+import cv2
+import os
+import numpy as np;
+import matplotlib.pyplot as plt
+import shutil
+
+
+def get_blobs_adaptive(img, bound_size, min_brightness_const, min_area):
+    im_gauss = cv2.GaussianBlur(img, (5, 5), 0) # "smoothing" the image with Gaussian Blur
+    thresh = cv2.adaptiveThreshold(im_gauss,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,bound_size,(min_brightness_const))
+    # Find contours
+    cont, hierarchy = cv2.findContours(thresh, 
+                            cv2.RETR_EXTERNAL, 
+                            cv2.CHAIN_APPROX_SIMPLE # only stores necessary points to define contour (avoids redundancy, saves memory)
+                            )
+    cont_filtered = []
+    for con in cont: 
+        area = cv2.contourArea(con) # calculate area, filter for contours above certain size
+        if area>min_area: # chosen by trial/error
+            cont_filtered.append(con)    
+    
+    # Draw + fill contours
+    new_img = np.full_like(img, 0) # image has black background
+    for c in cont_filtered:
+        cv2.drawContours(new_img, # image to draw on
+                        [c], # contours to draw
+                        -1, # contouridx: since negative, all contours are drawn
+                        255, # colour of contours: white
+                        -1 # thickness: since negative, fill in the shape
+                        )
+    return thresh, new_img
 
 
 class NeuralNetwork(nn.Module):
@@ -107,17 +138,25 @@ class ImageGallery:
         self.frame_label = None
         self.current_frame = 0
         self.selected_neuron = "AVA"
-        self.selected_neuron_label = None
         self.neuron_positions_dct = {"AVA": np.ones((total_frames,2)), "AVB": np.ones((total_frames,2))}
         self.neuron_colours_dct = {"AVA": "red", "AVB": "blue"}
         self.neuron_positions_frame = None
+
+        self.bound_size=11
+        self.min_brightness=-5
+        self.min_area=10
+
+        self.rect = None
+        self.start_x = None
+        self.start_y = None
+
 
         # Create the main frame
         main_frame = tk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         # Information
-        self.information_frame = tk.Frame(main_frame, padx=20)
+        self.information_frame = tk.Frame(main_frame, padx=40, pady=40)
         self.information_frame.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Information - title Label
@@ -138,11 +177,24 @@ class ImageGallery:
         for neuron in self.neuron_positions_dct.keys():
             neuron_positions = self.neuron_positions_dct[neuron]
             neuron_current_position = neuron_positions[self.current_frame]
-            neuron_button = tk.Button(self.neuron_positions_frame, text=f"{neuron}", font=("Arial", 20), width=10, bg=self.neuron_colours_dct[neuron], 
+            neuron_button = tk.Button(self.neuron_positions_frame, text=f"{neuron}: {neuron_current_position}", font=("Arial", 20), width=10, bg=self.neuron_colours_dct[neuron], 
                                       command=lambda neuron=neuron: self.set_selected_neuron(neuron))
             neuron_button.pack(side=tk.TOP, fill=tk.BOTH)
-            neuron_label = tk.Label(self.neuron_positions_frame, text=f"{neuron}: {neuron_current_position}", font=("Arial", 20))
-            neuron_label.pack(side=tk.TOP, fill=tk.BOTH)
+
+        # Information - bound size Scale
+        bound_size_slider = tk.Scale(self.information_frame, from_=5, to=50, orient=tk.HORIZONTAL, label="Bound Size", length=200, command=lambda value: self.set_bound_size(value))
+        bound_size_slider.set(self.bound_size)
+        bound_size_slider.pack(side=tk.TOP, fill=tk.BOTH)
+
+        # Information - min brightness Scale
+        min_brightness_slider = tk.Scale(self.information_frame, from_=-30, to=10, orient=tk.HORIZONTAL, label="Min Brightness", length=200, command=lambda value: self.set_min_brightness(value))
+        min_brightness_slider.set(self.min_brightness)
+        min_brightness_slider.pack(side=tk.TOP, fill=tk.BOTH)
+
+        # Information - min area Scale
+        min_area_slider = tk.Scale(self.information_frame, from_=0, to=100, orient=tk.HORIZONTAL, label="Min Area", length=200, command=lambda value: self.set_min_area(value))
+        min_area_slider.set(self.min_area)
+        min_area_slider.pack(side=tk.TOP, fill=tk.BOTH)
 
         # Information - start tracking Button
         start_tracking_button = tk.Button(self.information_frame, text="Start Tracking", font=("Arial", 20))
@@ -167,13 +219,15 @@ class ImageGallery:
         self.stage.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         # Enlarged Image Frame - enlarged image Canvas
-        self.enlarged_image_canvas = tk.Canvas(self.stage, bg="red")
+        self.enlarged_image_canvas = tk.Canvas(self.stage, bg="black")
         self.enlarged_image_canvas.pack(side=tk.LEFT, fill=tk.NONE, expand=False)
         # self.enlarged_image_canvas.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
 
-        self.enlarged_mask_canvas= tk.Canvas(self.stage, bg="blue")
+        self.enlarged_mask_canvas= tk.Canvas(self.stage, bg="black")
         self.enlarged_mask_canvas.pack(side=tk.RIGHT, fill=tk.NONE, expand=False)
-        # self.enlarged_mask_canvas.place(relx=0.9, rely=0.9, anchor=tk.CENTER)
+        self.enlarged_mask_canvas.bind("<ButtonPress-1>", self.on_mask_button_press)
+        self.enlarged_mask_canvas.bind("<B1-Motion>", self.on_mask_move_press)
+        self.enlarged_mask_canvas.bind("<ButtonRelease-1>", self.on_mask_button_release)
 
         # Enlarged Image Canvas - plot neuron positions and bind mouse click event      
         self.enlarged_image_canvas.bind('<Button 1>', lambda event: self.set_neuron_position_for_frame(self.selected_neuron, np.array((event.x, event.y)), self.current_frame))
@@ -196,11 +250,53 @@ class ImageGallery:
         # Thumbnails Canvas - thumbnails frames
         self.thumbnails_frame = tk.Frame(self.thumbnails_canvas)
         self.thumbnails_canvas.create_window((0, 0), window=self.thumbnails_frame, anchor='nw')
+        
 
 
         # Load and display the images
         self.load_thumbnail_images()
         print("Hello")
+
+    def on_mask_button_press(self, event):
+        self.start_x = self.enlarged_mask_canvas.canvasx(event.x)
+        self.start_y = self.enlarged_mask_canvas.canvasy(event.y)
+        self.rect = self.enlarged_mask_canvas.create_rectangle(self.x, self.y, 1, 1, outline="red")
+
+    
+    def on_mask_move_press(self, event):
+        curX = self.enlarged_mask_canvas.canvasx(event.x)
+        curY = self.enlarged_mask_canvas.canvasy(event.y)
+        self.enlarged_mask_canvas.coords(self.rect, self.start_x, self.start_y, curX, curY)
+    
+    def on_mask_button_release(self, event):
+        pass
+
+    def set_min_area(self, value):
+        """
+        Set the min area
+        """
+        self.min_area = int(value)
+        print(f"Min area: {self.min_area}")
+        image_path = self.thumbnail_images[self.current_frame][0].filename
+        self.display_enlarged_mask(image_path)
+
+    def set_min_brightness(self, value):
+        """
+        Set the min brightness
+        """
+        self.min_brightness = int(value)
+        print(f"Min brightness: {self.min_brightness}")
+        image_path = self.thumbnail_images[self.current_frame][0].filename
+        self.display_enlarged_mask(image_path)
+
+    def set_bound_size(self, value):
+        """
+        Set the bound size
+        """
+        self.bound_size = int(value)
+        print(f"Bound size: {self.bound_size}")
+        image_path = self.thumbnail_images[self.current_frame][0].filename
+        self.display_enlarged_mask(image_path)
 
     def stop_tracking(self):
         """
@@ -250,9 +346,10 @@ class ImageGallery:
             self.update_neuron_position_labels(self.current_frame)
             self.plot_neuron_positions_for_frame(self.current_frame)
             self.display_enlarged_image(self.thumbnail_images[self.current_frame][0], self.mask_images[self.current_frame][0])
+            self.display_enlarged_mask(self.thumbnail_images[self.current_frame][0].filename)
             # Scroll right to next thumbnail
             thumbnail_x_coord = (thumbnail_size[0])*self.current_frame
-            print(f"Thumbnail width: {thumbnail_x_coord}, canvas width: { self.thumbnails_canvas.winfo_width()}, frame width: { self.thumbnails_frame.winfo_width()}")
+            print(f"Thumbnail width: {thumbnail_x_coord}, enlarged_mask_canvas width: { self.thumbnails_canvas.winfo_width()}, frame width: { self.thumbnails_frame.winfo_width()}")
             if thumbnail_x_coord > self.thumbnails_canvas.winfo_width():
                 self.thumbnails_canvas.xview_moveto((thumbnail_x_coord/self.thumbnails_frame.winfo_width())-10)
             
@@ -267,9 +364,10 @@ class ImageGallery:
             self.update_neuron_position_labels(self.current_frame)
             self.plot_neuron_positions_for_frame(self.current_frame)
             self.display_enlarged_image(self.thumbnail_images[self.current_frame][0], self.mask_images[self.current_frame][0])
+            self.display_enlarged_mask(self.thumbnail_images[self.current_frame][0].filename)
             # Scroll right to next thumbnail
             thumbnail_x_coord = (thumbnail_size[0])*self.current_frame
-            print(f"Thumbnail width: {thumbnail_x_coord}, canvas width: { self.thumbnails_canvas.winfo_width()}, frame width: { self.thumbnails_frame.winfo_width()}")
+            print(f"Thumbnail width: {thumbnail_x_coord}, enlarged_mask_canvas width: { self.thumbnails_canvas.winfo_width()}, frame width: { self.thumbnails_frame.winfo_width()}")
             if thumbnail_x_coord > self.thumbnails_canvas.winfo_width():
                 self.thumbnails_canvas.xview_moveto(thumbnail_x_coord/self.thumbnails_frame.winfo_width())
 
@@ -282,7 +380,7 @@ class ImageGallery:
         """
         Plot the neuron positions for the current frame
         """
-        # Clear the canvas
+        # Clear the enlarged_mask_canvas
         self.enlarged_image_canvas.delete("neuron_position")
 
         # Plot the neuron positions
@@ -314,11 +412,9 @@ class ImageGallery:
         for neuron in self.neuron_positions_dct.keys():
             neuron_positions = self.neuron_positions_dct[neuron]
             neuron_current_position = neuron_positions[self.current_frame]
-            neuron_button = tk.Button(self.neuron_positions_frame, text=f"{neuron}", font=("Arial", 20), width=10, bg=self.neuron_colours_dct[neuron], activebackground="white", 
+            neuron_button = tk.Button(self.neuron_positions_frame, text=f"{neuron}: {neuron_current_position}", font=("Arial", 20), width=10, bg=self.neuron_colours_dct[neuron], activebackground="white", 
                                       command=lambda neuron=neuron: self.set_selected_neuron(neuron))
             neuron_button.pack(side=tk.TOP, fill=tk.BOTH)
-            neuron_label = tk.Label(self.neuron_positions_frame, text=f"{neuron}: {neuron_current_position}", font=("Arial", 20))
-            neuron_label.pack(side=tk.TOP, fill=tk.BOTH)
 
     def set_neuron_position_for_frame(self, neuron, neuron_position, frame):
         """
@@ -344,10 +440,13 @@ class ImageGallery:
             image_path = os.path.join(image_dir, image_file)
             mask_path = os.path.join(mask_dir, image_file)
             if os.path.isfile(image_path):
-                # Load the image and create a thumbnail
-                frame_num = image_file.split('.')[0]
-                mask_image = Image.open(mask_path)
+                # Get mask image
                 image = Image.open(image_path)
+                img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+                thresh, mask_image = get_blobs_adaptive(img, bound_size=self.bound_size, min_brightness_const=self.min_brightness, min_area=self.min_area)
+                mask_image = Image.fromarray(mask_image)
+
+                # Get thumbnail image
                 thumbnail = image.copy()
                 thumbnail.thumbnail(thumbnail_size)
                 thumbnail_tk = ImageTk.PhotoImage(thumbnail)
@@ -358,56 +457,52 @@ class ImageGallery:
                 thumbnail_label.pack(side=tk.LEFT, padx=5)
 
                 # Bind the label to display the enlarged image
-                thumbnail_label.bind("<Button-1>", lambda event, img=image, mask=mask_image: self.display_enlarged_image(img))
+                thumbnail_label.bind("<Button-1>", lambda event, img=image, img_path=image_path: self.on_thumbnail_click(img, img_path))
 
                 # Add the image and its label to the list
                 self.thumbnail_images.append((image, thumbnail_label))
                 self.mask_images.append((mask_image, thumbnail_label))
 
+    def on_thumbnail_click(self, image, mask_image):
+        """
+        Display the enlarged image when the thumbnail is clicked
+        """
+        # Display the enlarged image
+        self.display_enlarged_image(image)
+        # Display the mask image
+        self.display_enlarged_mask(mask_image)
+
     def display_enlarged_image(self, image, mask_image = None):
         """
         Display the image in the enlarged image label while maintaining aspect ratio and fitting window height
         """
-        # Get the size of the window
-        window_width = self.enlarged_image_canvas.winfo_width()
-        window_height = self.enlarged_image_canvas.winfo_height()
-
-        # Get the size of the image
         image_width, image_height = image.size
-        mask_width, mask_height = mask_image.size
-        print(f"Mask size: {mask_width} x {mask_height}")
         image_tk = ImageTk.PhotoImage(image)
-        mask_image_tk = ImageTk.PhotoImage(mask_image)
-        
-
-        # # Calculate the aspect ratio of the image
-        # aspect_ratio = image_width / image_height
-
-        # # Calculate the new width and height to fit the window height while maintaining aspect ratio
-        # new_height = window_height
-        # new_width = int(new_height * aspect_ratio)
-
-        # # Resize the image with the calculated size
-        # resized_image = image.resize((new_width, new_height), Image.LANCZOS)
-
-        # # Convert the resized image to Tkinter-compatible format
-        # resized_image_tk = ImageTk.PhotoImage(resized_image)
-        print(f"Image size: {image_width} x {image_height}")
-        print(f"Original canvas size: {self.enlarged_image_canvas.winfo_width()} x {self.enlarged_image_canvas.winfo_height()}")
         self.enlarged_image_canvas.config(width=image_width, height=image_height)
         self.enlarged_image_canvas.place()
-        print(f"Updated canvas size: {self.enlarged_image_canvas.winfo_width()} x {self.enlarged_image_canvas.winfo_height()}")
-        # Update the enlarged image label
-        self.enlarged_image_canvas.create_image(window_width/2, window_height/2, image=image_tk, anchor=tk.CENTER)
+        self.enlarged_image_canvas.create_image(image_width/2, image_height/2, image=image_tk, anchor=tk.CENTER)
         self.enlarged_image_canvas.image = image_tk
 
-        self.enlarged_mask_canvas.create_image(window_width/2, window_height/2, image=mask_image_tk, anchor=tk.CENTER)
-        self.enlarged_mask_canvas.image = mask_image_tk
 
         image_frame = int(os.path.basename(image.filename).split('.')[0])
         self.set_current_frame(image_frame)
         self.update_neuron_position_labels(self.current_frame)
         self.plot_neuron_positions_for_frame(self.current_frame)
+        print(f"Displaying image {image.filename}")
+    
+    def display_enlarged_mask(self, image_path):
+        """
+        Display the mask image
+        """
+        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE) 
+        thresh, mask_image = get_blobs_adaptive(img, bound_size=self.bound_size, min_brightness_const=self.min_brightness, min_area=self.min_area)
+        mask_image = Image.fromarray(mask_image)
+        mask_width, mask_height = mask_image.size
+        mask_image_tk = ImageTk.PhotoImage(mask_image)
+        self.enlarged_mask_canvas.config(width=mask_width, height=mask_height)
+        self.enlarged_mask_canvas.create_image(mask_width/2, mask_height/2, image=mask_image_tk, anchor=tk.CENTER)
+        self.enlarged_mask_canvas.image = mask_image_tk
+
 
 
 # Create the main window

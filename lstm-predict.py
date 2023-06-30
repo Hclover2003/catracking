@@ -77,6 +77,22 @@ class NeuralNetwork(nn.Module):
         output = self.linear(output)
         return output
 
+def plot_video(video):
+  # Visualize position difference between AVA and AVB for video
+  for video in videos:
+      try:
+          ava, avb = positions_dct[video]
+      except:
+        print(f"Error saving {video}")
+        continue
+      colours = np.arange(ava.shape[0])
+      plt.scatter(ava[:, 0], ava[:, 1], c=colours, cmap="Greens", label="AVA")
+      plt.scatter(avb[:, 0], avb[:, 1], c=colours, cmap="Oranges", label="AVB")
+      plt.legend()
+      plt.savefig(os.path.join(project_dir, "cases", f"{video}.png"))
+      print(f"Saved {video}")
+      plt.close()
+
 def split_lst(lst: List[Tuple], n: int) -> List[List[Tuple]]:
   """
   Split a list into sequences of length n
@@ -98,7 +114,6 @@ def split_lst(lst: List[Tuple], n: int) -> List[List[Tuple]]:
       shortened_sequences.append(short_seq)
   return shortened_sequences
 
-
 def slice_sequence(sequence: np.array, frame_rate: int) -> np.array:
   """
   Slices sequence into smaller sequences of length frame_rate
@@ -115,78 +130,10 @@ def slice_sequence(sequence: np.array, frame_rate: int) -> np.array:
   indices = [i for i in range(0, len(sequence), frame_rate)]
   return sequence[indices]
 
-
-def find_centroids(segmented_img: np.ndarray) -> Tuple[List, List]:
-  """
-  Finds centroids and contours of segmented image
-  
-  Parameters
-  ----------
-  segmented_img: segmented image (binary)
-  
-  Returns
-  -------
-  centroids: list of centroids in image
-  contours: list of contours in image
-  """
-  centroids = []
-  # get contours
-  contours, hierarchy = cv2.findContours(segmented_img, 
-                          cv2.RETR_EXTERNAL, 
-                          cv2.CHAIN_APPROX_SIMPLE)
-  
-  # compute the centroid of each contour
-  for c in contours:
-    M = cv2.moments(c)
-    cX = int(M["m10"] / M["m00"])
-    cY = int(M["m01"] / M["m00"])
-    centroids.append((cX, cY))
-  
-  return centroids, contours
-
-def get_dist_score(x, y, x2, y2):
-  """Returns distance score between two points
-  x, y: coordinates of point 1
-  x2, y2: coordinates of point 2"""
-  return math.sqrt(((x2-x)**2)+((y2-y)**2))
-
-def get_closest_cent(centroids:List, pred:Tuple, log=False):
-  """ Returns the closest centroid to the predicted coordinates
-  centroids: list of centroids
-  pred: predicted coordinates"""
-  max_score = 10**1000
-  predx, predy = pred
-  coords = (0,0) # Closest to predicted coords
-
-  for (pot_x, pot_y) in centroids:
-    score = get_dist_score(predx, predy, pot_x, pot_y)
-    if log:
-      print(f"Centroid: {pot_x}, {pot_y} | Score: {round(score)}")
-    if score <= max_score:
-      max_score = score
-      coords = (pot_x, pot_y)
-  return coords
-
-def crop_img(img, x, y, w, h):
-  """Crop image to x, y, w, h"""
-  return img[max(0, y-(h//2)): min(img.shape[0], y+(h//2)),
-              max(0, x-(w//2)): min(img.shape[1], x+(w//2))]
-
-def get_color_score(img1, img2):
-  hst1 = cv2.calcHist([img1], [0], None, [256], [0, 256])
-  hst2 = cv2.calcHist([img2], [0], None, [256], [0, 256])
-  score = cv2.compareHist(hst1, hst2, cv2.HISTCMP_CORREL)
-  return score
-
-def get_shape_score(cont1, cont2):
-  area1 = cv2.contourArea(cont1)
-  area2 = cv2.contourArea(cont2)
-  return abs(area1 - area2)
-
 def train_epoch(model: NeuralNetwork, 
                 train_sequences: List[List[Tuple]], 
                 valid_sequences: List[List[Tuple]] , 
-                batch_size: int, num_predict_coords: int, sequence_length: int, frame_rate: int,
+                batch_size: int, 
                 criterion, optimizer):
   """ 
   Trains model for one epoch. 
@@ -208,53 +155,43 @@ def train_epoch(model: NeuralNetwork,
       final train loss, final valid loss, and average train loss of model for epoch
       
   """
-  # Preprocess train sequences
-  # Slice sequences to get desired frame rate
-  train_sequences = [slice_sequence(seq, frame_rate) for seq in train_sequences]
-  # Split sequences to get desired sequence length
-  shortened_train_sequences = []
-  for sequence in train_sequences:
-    shortened_train_sequences.extend(split_lst(sequence, sequence_length))
-  shortened_train_sequences = np.stack(shortened_train_sequences)
-  # Shuffle order of sequences
-  shortened_train_sequences = np.random.permutation(shortened_train_sequences) 
-  
-  # Preprocess valid sequences
-  shortened_valid_sequences = []
-  for sequence in valid_sequences:
-    shortened_valid_sequences.extend(split_lst(sequence, 100))
-  shortened_valid_sequences = np.stack(shortened_valid_sequences)
   
   # Number of batches
-  num_batches = len(shortened_train_sequences)//batch_size
+  num_batches = len(train_sequences)//batch_size
   # Total loss for epoch
   total_loss = 0
   
   # Train model
   for i in range(num_batches):
     # Get batch of sequences and convert to tensors
-    input_sequences = torch.tensor(shortened_train_sequences[i*batch_size:(i+1)*batch_size][:-num_predict_coords], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+    input_sequences = torch.tensor(np.array(train_sequences[i*batch_size:(i+1)*batch_size][:-1]), dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
     # Get actual sequences and convert to tensors
-    actual_sequences = torch.tensor(shortened_train_sequences[i*batch_size:(i+1)*batch_size][num_predict_coords:], dtype=torch.float32)
+    actual_sequences = torch.tensor(train_sequences[i*batch_size:(i+1)*batch_size][-1], dtype=torch.float32)
     # Predict next coordinates
-    pred_sequences = model(input_sequences)
+    pred_sequences = model(input_sequences)[-1]
 
     # Calculate loss
     loss = criterion(pred_sequences, actual_sequences)
     total_loss += loss
     loss.backward()
     optimizer.step()
-    
+  
+  # Calculate validation loss
+  total_valid_loss = 0
+  for j in range(len(valid_sequences)):
     # Calculate validation loss
-    valid_input = torch.tensor(shortened_valid_sequences[:][:-1], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-    valid_actual = torch.tensor(shortened_valid_sequences[:][1:], dtype=torch.float32)
-    valid_pred = model(valid_input)
+    valid_input = torch.tensor(np.array(valid_sequences[:][:-1]), dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+    valid_actual = torch.tensor(valid_sequences[:][-1], dtype=torch.float32)
+    valid_pred = model(valid_input)[-1]
     valid_loss = criterion(valid_pred, valid_actual)
+    total_valid_loss += valid_loss
     
   # Log losses to wandb
-  wandb.log({"loss": loss, "valid_loss": valid_loss})
+  avg_train_loss = total_loss/num_batches
+  avg_valid_loss = total_valid_loss/len(valid_sequences)
+  wandb.log({"loss": loss, "valid_loss": valid_loss, "avg_total_loss": avg_train_loss, "avg_valid_loss": avg_valid_loss})
   
-  return loss, valid_loss, (total_loss/num_batches)
+  return loss, valid_loss, avg_train_loss, avg_valid_loss
 
 def train(train_sequences: List[List[Tuple]], valid_sequences: List[List[Tuple]], model_dir:str, model_name:str, create_new_model: bool, config: dict=None):
   """
@@ -273,6 +210,27 @@ def train(train_sequences: List[List[Tuple]], valid_sequences: List[List[Tuple]]
     start = time.time()
     config = wandb.config
     
+    # Slice sequences to get desired frame rate
+    train_sequences = [slice_sequence(seq, config.frame_rate) for seq in train_sequences]
+    # Split sequences to get desired sequence length
+    shortened_train_sequences = []
+    for sequence in train_sequences:
+      shortened_train_sequences.extend(split_lst(sequence, config.sequence_length))
+    shortened_train_sequences = np.stack(shortened_train_sequences)
+    # Shuffle order of sequences
+    shortened_train_sequences = np.random.permutation(shortened_train_sequences) 
+    
+    # Preprocess valid sequences
+    shortened_valid_sequences = []
+    for sequence in valid_sequences:
+      shortened_valid_sequences.extend(split_lst(sequence, 100))
+    shortened_valid_sequences = np.stack(shortened_valid_sequences)
+
+    print(f"Train sequences: {len(shortened_train_sequences)}, Valid sequences: {len(shortened_valid_sequences)}")
+    # shortened_train_sequences = random.sample(list(shortened_train_sequences), config.sample)
+    shortened_valid_sequences = random.sample(list(shortened_valid_sequences), 100)
+    print(f"Train sequences (sample): {len(shortened_train_sequences)}, Valid sequences (sample): {len(shortened_valid_sequences)}")
+
     # Initialize model, loss function, and optimizer
     if create_new_model:
       model = NeuralNetwork(hidden_nodes=config.hidden_nodes, num_layers=config.num_layers)
@@ -280,6 +238,7 @@ def train(train_sequences: List[List[Tuple]], valid_sequences: List[List[Tuple]]
     else:
       model = joblib.load(os.path.join(model_dir, "lstm_model5e6.pkl"))
       print("Model Loaded")
+
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
     checkpoint_num = 0
@@ -289,15 +248,13 @@ def train(train_sequences: List[List[Tuple]], valid_sequences: List[List[Tuple]]
       os.mkdir(os.path.join(model_dir, model_name))
     # Train model for multiple epochs
     for epoch in range(config.epochs):
-      train_loss, valid_loss, avg_train_loss = train_epoch(model=model, 
-                                train_sequences=train_sequences,
-                                valid_sequences=valid_sequences, 
+      train_loss, valid_loss, avg_train_loss, avg_valid_loss = train_epoch(model=model, 
+                                train_sequences=shortened_train_sequences,
+                                valid_sequences=shortened_valid_sequences, 
                                 batch_size=config.batch_size, 
-                                num_predict_coords=config.num_predict_coords, 
-                                sequence_length=config.sequence_length, 
-                                frame_rate=config.frame_rate,
                                 criterion=criterion, optimizer=optimizer)
-      wandb.log({"avg_train_loss": avg_train_loss, "epoch": epoch, "train_loss": train_loss, "valid_loss": valid_loss})    
+      print(f"Epoch: {epoch}, Train Loss: {train_loss}, Valid Loss: {valid_loss}, Avg Train Loss: {avg_train_loss}, Avg Valid Loss: {avg_valid_loss}")
+      wandb.log({"avg_train_loss": avg_train_loss, "avg_valid_loss":avg_valid_loss, "epoch": epoch, "train_loss": train_loss, "valid_loss": valid_loss})    
         
       if epoch % 100 == 0:
         joblib.dump(model, os.path.join(model_dir, model_name, str(checkpoint_num)))
@@ -339,20 +296,17 @@ os.environ["WANDB_API_KEY"] = WANDB_API_KEY
 # Change to your own directory
 project_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm"
 data_dir = os.path.join(project_dir, "data")
-video_dir = os.path.join(data_dir, "imgs")
 position_dir = os.path.join(data_dir, "positions")
 model_dir = os.path.join(project_dir, "models", "lstm")
-img_dir = os.path.join(project_dir, "images")
 results_dir = os.path.join(project_dir, "results")
 # data_dir = "/Users/huayinluo/Desktop/code/catracking-1/data"
-# video_dir = os.path.join(data_dir, "imgs")
 # position_dir = os.path.join(data_dir, "positions")
 # model_dir = "/Users/huayinluo/Desktop/code/catracking-1/models/lstm"
-# img_dir = "/Users/huayinluo/Desktop/code/catracking-1/images"
 # results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
 
 # Loop through videos and get positions
-videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415', "11310", "11311", "11313", "11315", "11316", "11317_1", "11317_2", "11318", "11320_1", "11320_2", "11323", "11324", "11325_1", "11325_2", "11327_1", "11327_2", "11328_1", "11332", "11334", "11350-a_crop", "11352-a_crop", "11363-a_crop", "11364_a_crop", "11365-a", "11403-a_crop", "11405-a_crop", "11407_crop_1", "11549_crop", "11550_crop", "11551_crop", "11552_crop", "11553_crop", "11554_crop_1", "11554_crop_2", "11555_crop", "11556_crop", "11558_crop", "11560_crop", "11563_crop", "11565_crop", "11569_crop_1", "11569_crop_2", "11570_crop", "11595_crop", "11596_crop", "11597_crop", "11598_crop"]
+videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415', "11310", "11311", "11315", "11317_1", "11317_2", "11318", "11320_1", "11323", "11324", "11325_1", "11325_2", "11327_1", "11327_2", "11328_1", "11332","11350-a_crop", "11352-a_crop", "11363-a_crop", "11364_a_crop", "11365-a", "11403-a_crop", "11405-a_crop", "11407_crop_1", "11549_crop", "11551_crop", "11552_crop", "11553_crop", "11554_crop_1", "11554_crop_2", "11555_crop", "11556_crop", "11558_crop", "11560_crop", "11565_crop", "11569_crop_1", "11569_crop_2", "11570_crop", "11595_crop", "11596_crop", "11597_crop", "11598_crop"]
+# videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415']
 positions_dct={} 
 for video in videos:
   # Load AVA and AVB positions
@@ -378,28 +332,14 @@ for video in videos:
     print(f"Loading {video}...")
 print(f"Finished loading images and positions: {len(positions_dct)} positions")
 
-# # Visualize position difference between AVA and AVB for video
-# for video in videos:
-#     try:
-#         ava, avb = positions_dct[video]
-#     except:
-#        print(f"Error saving {video}")
-#        continue
-#     colours = np.arange(ava.shape[0])
-#     plt.scatter(ava[:, 0], ava[:, 1], c=colours, cmap="Greens", label="AVA")
-#     plt.scatter(avb[:, 0], avb[:, 1], c=colours, cmap="Oranges", label="AVB")
-#     plt.legend()
-#     plt.savefig(os.path.join(project_dir, "cases", f"{video}.png"))
-#     print(f"Saved {video}")
-#     plt.close()
 
-# Original data test/train split (# Add 80% of each video to training set, 20% to testing set)
+
+# Normalize + Train/Test split (# Add 80% of each video to training set, 20% to testing set)
 train_sequences = []
 test_sequences = []
 max_video_width = 550
 max_video_height = 570
 for video in videos:
-  # Normalize positions
   try:
     all_positions = positions_dct[video]
   except:
@@ -413,50 +353,72 @@ for video in videos:
   train_sequences.append(avb[:split])
   test_sequences.append(ava[split:])
   test_sequences.append(avb[split:])
-
 print("Test/Train split complete")
 
-print("Starting sweep...")
-# Sweep config
-parameters_dct = {
-"sequence_length": {"values": [10, 25, 50, 100, 200, 250]},
-"frame_rate":{"values": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20]},
-"num_predict_coords": {"values": [1, 2, 3, 4, 5, 10]},
-"batch_size": {"values": [8, 16, 32, 64]},
-"learning_rate": {"values": [0.00000001, 0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.01]},
-"epochs": {"values": [50, 100, 200, 500, 1000, 2000]},
-"hidden_nodes": {"values": [2, 3, 4, 5, 6, 7, 8]},
-"num_layers": {"values": [1, 2, 3]},
-}
 
-# Set constant parameters
-parameters_dct.update({
-"sequence_length": {"value": 250},
-"frame_rate":{"value": 1},
-"num_predict_coords": {"value": 1},
-"batch_size": {"value": 16},
-"learning_rate": {"value": 0.001},
-"epochs": {"value": 10000},
-"hidden_nodes": {"value": 3},
-"num_layers": {"value": 1},
-})
+TRAIN = True
+if TRAIN:
+  # Train model
+  train(train_sequences=train_sequences, 
+        valid_sequences=test_sequences,
+        model_dir=model_dir,
+        model_name="lstm_predict_june30-7",
+        create_new_model=True,
+        config={"sequence_length": 10, 
+                "sample": 10000,
+                "frame_rate": 1, 
+                "num_predict_coords": 1, 
+                "batch_size": 16, 
+                "learning_rate": 0.000001, 
+                "epochs": 1000, 
+                "hidden_nodes": 2, 
+                "num_layers": 1})
 
-sweep_config = {
-  "method": "grid",
-  "name": "hidden_node_sweep_existing",
-  "metric": {
-    "goal": "minimize",
-    "name": "loss"
-  },
-  "parameters": parameters_dct,
-}
 
-sweep_id = wandb.sweep(sweep_config, project="lstm-predict")
 
-# Run sweep to find hyperparameters
-wandb.agent(sweep_id, function=lambda: train(train_sequences=train_sequences, 
-                                              valid_sequences=test_sequences,
-                                              model_dir=model_dir,
-                                              model_name="lstm_predict_june28-2",
-                                              create_new_model=True,
-                                              ))
+SWEEP = False
+if SWEEP:
+  print("Starting sweep...")
+  # Sweep config
+  parameters_dct = {
+  "sequence_length": {"values": [10, 25, 50, 100, 200, 250]},
+  "frame_rate":{"values": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20]},
+  "num_predict_coords": {"values": [1, 2, 3, 4, 5, 10]},
+  "batch_size": {"values": [8, 16, 32, 64]},
+  "learning_rate": {"values": [0.00000001, 0.0000001, 0.000001, 0.00001, 0.0001, 0.001, 0.01]},
+  "epochs": {"values": [50, 100, 200, 500, 1000, 2000]},
+  "hidden_nodes": {"values": [2, 3, 4, 5, 6, 7, 8]},
+  "num_layers": {"values": [1, 2, 3]},
+  }
+
+  # Set constant parameters
+  parameters_dct.update({
+  "sequence_length": {"value": 10},
+  "frame_rate":{"value": 1},
+  "num_predict_coords": {"value": 1},
+  "batch_size": {"value": 16},
+  "learning_rate": {"value": 0.0001},
+  "epochs": {"value": 1000},
+  "hidden_nodes": {"value": 2},
+  "num_layers": {"value": 1},
+  })
+
+  sweep_config = {
+    "method": "grid",
+    "name": "hidden_node_sweep_existing",
+    "metric": {
+      "goal": "minimize",
+      "name": "loss"
+    },
+    "parameters": parameters_dct,
+  }
+
+  sweep_id = wandb.sweep(sweep_config, project="lstm-predict")
+
+  # Run sweep to find hyperparameters
+  wandb.agent(sweep_id, function=lambda: train(train_sequences=train_sequences, 
+                                                valid_sequences=test_sequences,
+                                                model_dir=model_dir,
+                                                model_name="lstm_predict_june30-4",
+                                                create_new_model=True,
+                                                ))

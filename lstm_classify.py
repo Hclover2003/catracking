@@ -43,6 +43,8 @@ import wandb
 import random
 import itertools
 import sys
+from matplotlib.animation import FuncAnimation
+import scipy
 
 class CaPositionsDataset(Dataset):
     """Calcium tracking positions dataset."""
@@ -252,198 +254,158 @@ def get_most_similar_centroid(img, prev_img, pred_pt:Tuple, prev_pt:Tuple, centr
             
     return closest_centroid
 
-def show_crop_images(img, mask, prev_img, act_pt, pred_pt, prev_pt, cnts, contours):
-    cropped_prev_img = crop_img(prev_img, prev_pt)
-    num_centroids = len(centroids)
-    cropped_imgs = []
-    for i in range(num_centroids):
-      # Crop image around centroid
-      cnt = cnts[i]
-      cont = contours[i]
-      cropped_img = crop_img(img, cnt)
-      cropped_imgs.append(cropped_img)
-        # Visualize each cropped centroid and their respective scores
-    
-    closest = get_most_similar_centroid(img, prev_img, pred_pt, prev_pt, cnts, contours)
-    closest_act = get_closest_cent(cnts, act_pt)
-    
-    fig, ax = plt.subplots(1, num_centroids+5)
-    ax[0].imshow(prev_img)
-    ax[0].plot(prev_pt[0], prev_pt[1], 'ro', markersize=3, label= "Previous")
-    ax[0].set_title(f"Previous Img: Frame {frame-1}")
-    ax[1].imshow(cropped_prev_img) # Plot previous cropped
-    ax[1].set_title("Previous Cropped")
-    ax[2].imshow(img)
-    ax[2].set_title(f"Current Img: Frame {frame}")
-    ax[2].plot(act_pt[0], act_pt[1], 'ro', markersize=3, label= "Actual")
-    ax[2].plot(pred_pt[0], pred_pt[1], 'bo', markersize=3, label = "Predicted")
-    ax[2].plot(closest[0], closest[1], 'mo', markersize=3, label = "Closest Predicted")
-    ax[2].plot(closest_act[0], closest_act[1], 'go', markersize=3, label = "Closest Actual")
-    ax[3].imshow(mask)
-    ax[3].set_title("Mask")
-    for i in range(num_centroids):
-      ax[3].plot(cnts[i][0], cnts[i][1], 'ro', markersize=1, label= f"Centroid {i}")
-      ax[i+4].imshow(cropped_imgs[i]) # Plot centroid cropped
-      title = f"Cnt {cnts[i]}"
-      if cnts[i] == closest:
-        title += " | Pred"
-      if cnts[i] == closest_act:
-        title += " | Act"
-      ax[i+4].set_title(title)
-    # ax[3].legend()
-    ax[-1].imshow(crop_img(img, act_pt.astype(int), crop_size, crop_size))
-    ax[-1].set_title("Actual Cropped")
-    plt.show()
 
-# Set seed (for reproducibility)
-np.random.seed(0)
-random.seed(0)
-torch.manual_seed(0)
-torch.cuda.manual_seed(0)
-os.environ["PYTHONHASHSEED"] = str(0)
+def split_lst(lst: List[Tuple], n: int) -> List[List[Tuple]]:
+  """
+  Split a list into sequences of length n
+  
+  Parameters
+  ----------
+  lst: original sequence of x,y coordinates
+  n: length of each shortened sequence
+  
+  Returns
+  -------
+  List of sequences of length n
+  """
+  length = len(lst)
+  shortened_sequences = []
+  for i in range((length+n-1)//n):
+    short_seq = lst[i*n: (i+1)*n]
+    if len(short_seq) == n:
+      shortened_sequences.append(short_seq)
+  return shortened_sequences
+
+def slice_sequence(sequence: np.array, frame_rate: int) -> np.array:
+  """
+  Slices sequence into smaller sequences of length frame_rate
+  
+  Parameters
+  ----------
+      sequence (np.array): Sequence of x,y coordinates
+      frame_rate (int): Number of frames per second
+  
+  Returns
+  -------
+      List of sequences of length frame_rate
+  """
+  indices = [i for i in range(0, len(sequence), frame_rate)]
+  return sequence[indices]
+
+def save_centroids(videos):
+  max_width, max_height = 450, 550
+  for video in videos:
+    # Load AVA and AVB positions
+    video_centroids = []
+    positions_ava = np.load(os.path.join(position_dir, f"AVA_{video}.mat.npy"))
+    positions_avb = np.load(os.path.join(position_dir, f"AVB_{video}.mat.npy"))
+    num_frames = len(positions_ava)
+    for frame in range(num_frames):
+      frame_mask = cv2.cvtColor(cv2.imread(os.path.join(img_dir, "ground_truth", video, f"{frame}.png")), cv2.COLOR_BGR2GRAY)
+      centroids, contours = find_centroids(frame_mask)
+      video_centroids.append(centroids)
+      print(f"Video {video} | Frame {frame} | Centroids: {centroids}")
+    save_dir = os.path.join(data_dir, "centroids", video)
+    padded_video_centroids = zip(*itertools.zip_longest(*video_centroids, fillvalue=(0,0)))
+    padded_video_centroids = np.array(list(padded_video_centroids))
+    padded_video_centroids = padded_video_centroids[:, :5, :]
+    if not os.path.exists(save_dir):
+      os.makedirs(save_dir)
+    np.save(os.path.join(save_dir, "centroids.npy"), padded_video_centroids)
+  # Set seed (for reproducibility)
+  np.random.seed(0)
+  random.seed(0)
+  torch.manual_seed(0)
+  torch.cuda.manual_seed(0)
+  os.environ["PYTHONHASHSEED"] = str(0)
+  DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+  print("Seed set")
+
+
+# Set seed for reproducibility
+SEED = 0
+np.random.seed(SEED)
+random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed(SEED)
+os.environ["PYTHONHASHSEED"] = str(SEED)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Seed set")
 
+# Login to wandb
+WANDB_API_KEY = "9623d3970461071fa95cf35f8c34d09b2f3fa223"
+os.environ["WANDB_API_KEY"] = WANDB_API_KEY
 
+# Preprocessing
 data_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\data"
-video_dir = rf"{data_dir}\imgs"
 position_dir = rf"{data_dir}\positions"
-
 model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\lstm"
 img_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images"
 results_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\results"
 
-
-# Preprocessing
-data_dir = "/Users/huayinluo/Desktop/code/catracking-1/data"
-video_dir = os.path.join(data_dir, "imgs")
-position_dir = os.path.join(data_dir, "positions")
-model_dir = "/Users/huayinluo/Desktop/code/catracking-1/models/lstm_classify"
-img_dir = "/Users/huayinluo/Desktop/code/catracking-1/images"
-results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
+# data_dir = "/Users/huayinluo/Desktop/code/catracking-1/data"
+# position_dir = os.path.join(data_dir, "positions")
+# model_dir = "/Users/huayinluo/Desktop/code/catracking-1/models/lstm_classify"
+# img_dir = "/Users/huayinluo/Desktop/code/catracking-1/images"
+# results_dir = "/Users/huayinluo/Desktop/code/catracking-1/results"
 
 # Save all video positions in dictionary
-videos = ['11408', '11409', "11410", '11411']
-positions_dct={} # Dictionary of video: positions (AVA, AVB)
-for video in videos:
-  AVA_positions = np.load(os.path.join(position_dir, f"AVA_{video}.mat.npy"))
-  AVB_positions = np.load(os.path.join(position_dir, f"AVB_{video}.mat.npy"))
-  all_neurons_positions = np.stack((AVA_positions, AVB_positions))
-  positions_dct[video] = all_neurons_positions
-  print(f"Loading {video}...")
-print(f"Finished loading images and positions: {len(positions_dct)} positions")
+videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415']
+# videos = ['11408', '11409', "11410", '11411', '11413', '11414', '11415', "11310", "11311", "11315", "11317_1", "11317_2", "11318", "11320_1", "11323", "11324", "11325_1", "11325_2", "11327_1", "11327_2", "11328_1", "11332","11350-a_crop", "11352-a_crop", "11363-a_crop", "11364_a_crop", "11365-a", "11403-a_crop", "11405-a_crop", "11407_crop_1", "11549_crop", "11551_crop", "11552_crop", "11553_crop", "11554_crop_1", "11554_crop_2", "11555_crop", "11556_crop", "11558_crop", "11560_crop", "11565_crop", "11569_crop_1", "11569_crop_2", "11570_crop", "11595_crop", "11596_crop", "11597_crop", "11598_crop"]
 
-# Original data test/train split (# Add 80% of each video to training set, 20% to testing set)
-train_sequences = []
-test_sequences = []
+ 
+# Train/Test split
+sequence_length = 50
+all_sequences = []
+all_labels = []
+
+norm_width, norm_height = 450, 500
+
+# Get training set
 for video in videos:
-  all_positions = positions_dct[video]
-  height, width = cv2.imread(f"/Users/huayinluo/Desktop/code/catracking-1/images/original/{video}/0.png").shape[:2]
-  norm_positions = np.multiply(all_positions, [1/width, 1/height]) # Norm positions shape: [Num neurons = 2, Sequence length = 2571, Num coordinates = 2]
-  split = math.floor(norm_positions.shape[1]*0.8)
-  train_sequences.append(norm_positions[:, :split, :])
-  test_sequences.append(norm_positions[:, split:, :])
+  positions_ava = np.load(os.path.join(position_dir, f"AVA_{video}.mat.npy"))
+  positions_avb = np.load(os.path.join(position_dir, f"AVB_{video}.mat.npy"))
+  norm_positions_ava = np.multiply(positions_ava, [1/norm_width, 1/norm_height])
+  norm_positions_avb = np.multiply(positions_avb, [1/norm_width, 1/norm_height])
+  all_centroids = np.load(os.path.join(data_dir, "centroids", video, "centroids.npy"))
+  split = math.floor(len(norm_positions_ava)*0.8)
+  
+  frame = sequence_length
+  while frame < len(norm_positions_ava):
+    centroids = np.unique(all_centroids[frame], axis=0)
+    closest_centroid_ava = get_closest_cent(centroids, positions_ava[frame])
+    closest_centroid_avb = get_closest_cent(centroids, positions_avb[frame])
+    
+    short_ava = norm_positions_ava[frame-sequence_length:frame]
+    short_avb = norm_positions_avb[frame-sequence_length:frame]
+
+    for centroid in centroids:
+      centroid_norm = np.multiply(centroid, [1/norm_width, 1/norm_height])
+      if ((centroid == closest_centroid_ava).all()):
+        all_labels.append(1)
+        all_sequences.append([*short_ava, centroid_norm])
+      elif ((centroid== closest_centroid_avb).all()):
+        all_labels.append(1)
+        all_sequences.append([*short_avb, centroid_norm])
+      else:
+        all_labels.append(0)
+        all_sequences.append([*short_ava, centroid_norm])
+        all_labels.append(0)
+        all_sequences.append([*short_avb, centroid_norm])
+    frame += sequence_length
+
+split = (len(all_sequences)//10)*8
+all_sequences = np.array(all_sequences)
+all_labels = np.array(all_labels)
+train_sequences = all_sequences[:split]
+train_labels = all_labels[:split]
+test_sequences = all_sequences[split:]
+test_labels = all_labels[split:]
 print("Test/Train split complete")
 
-# Set sequence length to avoid vanishing gradients
-sequence_length = 250
-
-# Create labelled training data (with shuffled sequences)
-train_sequences_with_shuffled = []
-train_labels_with_shuffled = []
-
-for ava_sequence, avb_sequence in train_sequences:
-    # Add full correct sequence for two neurons (we have ~8 full sequences per video, total ~32 full sequences)
-    num_full_sequences = math.floor(ava_sequence.shape[0]/sequence_length)
-    for j in range(num_full_sequences):
-      train_sequences_with_shuffled.append(ava_sequence[j*sequence_length:(j+1)*sequence_length])
-      train_labels_with_shuffled.append(np.ones(sequence_length))
-      train_sequences_with_shuffled.append(avb_sequence[j*sequence_length:(j+1)*sequence_length])
-      train_labels_with_shuffled.append(np.zeros(sequence_length))
-    
-    # Add shuffled sequences of two neurons
-    for i in range(10, sequence_length-10, 10):
-        # Create label with i number of 1s (AVA) and sequence_length-i number of 0s (AVB)
-        shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(sequence_length-i)))
-        
-        # Add k random shuffled sequence with that number of AVAs and AVBs
-        for k in range(10):
-          np.random.shuffle(shuffled_sequence_label)
-          shuffled_sequence = shuffled_sequence_label.copy()
-          shuffled_sequence = np.expand_dims(shuffled_sequence, axis=1) # add axis
-          shuffled_sequence = np.repeat(shuffled_sequence, 2, axis=1) # repeat for x and y
-          for w in range(sequence_length):
-              # Labels: 1 is AVA, 0 is AVB
-              shuffled_sequence[w] = ava_sequence[w] if shuffled_sequence_label[w] == 1 else avb_sequence[w]
-          
-          # Add shuffled sequence & label to training data
-          train_sequences_with_shuffled.append(shuffled_sequence)
-          train_labels_with_shuffled.append(shuffled_sequence_label)
-print(f"Train sequences: {len(train_sequences_with_shuffled)}")
-train_sequences_with_shuffled = np.stack(train_sequences_with_shuffled) # Combine list of arrays into flat array
-train_labels_with_shuffled = np.stack(train_labels_with_shuffled)
-
-# Create dataloaders
-train_dataset = CaPositionsDataset(train_sequences_with_shuffled, train_labels_with_shuffled)
+train_dataset = CaPositionsDataset(train_sequences, train_labels)
 train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-
-# Visualise shuffled sequences
-if False:
-  for i, (sequences, labels) in enumerate(train_loader):
-    sequence = sequences[0].detach().numpy()
-    label = labels[0].detach().numpy()
-    alphas = np.linspace(0.05, 1, sequence.shape[0])
-    alphas.reshape(-1, 1)
-    colours = label.copy()
-    colours_rgb = np.repeat(colours[:, np.newaxis], 3, axis=1)
-    colours_rgb = np.multiply(colours_rgb, (1, 0, 0))
-    colours_rgba = np.column_stack((colours_rgb, alphas))
-    plt.close()
-    plt.scatter(sequence[:, 0], sequence[:, 1], c=colours_rgba)
-    for z in range(20):
-        plt.annotate(z, (sequence[z, 0], sequence[z, 1]))
-    plt.savefig(f"shuffled_sequences/{i}.png")
-    print(f"Saved {i}")
-
-
-# Create labelled testing data (with shuffled sequences)
-test_sequences_with_shuffled = []
-test_labels_with_shuffled = []
-test_sequence_length = 20 # Test sequences are shorter
-for ava_sequence, avb_sequence in test_sequences:
-  # Add full correct sequence for two neurons
-  num_full_sequences = math.floor(ava_sequence.shape[0]/test_sequence_length)
-  for j in range(num_full_sequences):
-    test_sequences_with_shuffled.append(ava_sequence[j*test_sequence_length:(j+1)*test_sequence_length])
-    test_labels_with_shuffled.append(np.ones(test_sequence_length))
-    test_sequences_with_shuffled.append(avb_sequence[j*test_sequence_length:(j+1)*test_sequence_length])
-    test_labels_with_shuffled.append(np.zeros(test_sequence_length))
-  
-  # Add shuffled sequences of two neurons
-  for i in range((test_sequence_length//2)-10, (test_sequence_length//2)+10):
-      # Create label with i number of 1s (AVA) and sequence_length-i number of 0s (AVB)
-      shuffled_sequence_label = np.concatenate((np.ones(i), np.zeros(test_sequence_length-i)))
-      
-      # Add k random shuffled sequence with that number of AVAs and AVBs
-      for k in range(10):
-        np.random.shuffle(shuffled_sequence_label)
-        shuffled_sequence = shuffled_sequence_label.copy()
-        shuffled_sequence = np.expand_dims(shuffled_sequence, axis=1) # add axis
-        shuffled_sequence = np.repeat(shuffled_sequence, 2, axis=1) # repeat for x and y
-        for w in range(test_sequence_length):
-            # Labels: 1 is AVA, 0 is AVB
-            shuffled_sequence[w] = ava_sequence[w] if shuffled_sequence_label[w] == 1 else avb_sequence[w]
-        
-        # Add shuffled sequence & label to training data
-        test_sequences_with_shuffled.append(shuffled_sequence)
-        test_labels_with_shuffled.append(shuffled_sequence_label)
-        print(f"Added shuffled sequence {i} for video {video}")
-
-print(f"Test sequences: {len(test_sequences_with_shuffled)}")
-test_sequences_with_shuffled = np.stack(test_sequences_with_shuffled)
-test_labels_with_shuffled = np.stack(test_labels_with_shuffled)
-
-
-test_dataset = CaPositionsDataset(test_sequences_with_shuffled, test_labels_with_shuffled)
+test_dataset = CaPositionsDataset(test_sequences, test_labels)
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
 
 TRAINING = True # Set to True if training model
@@ -451,16 +413,21 @@ TESTING = False # Set to True if testing model
 
 if TRAINING:
   # Initialise model and parameters
+  # model = joblib.load(os.path.join(model_dir, "lstm_classifier_5.pkl"))
+  # model_name = "lstm_classifier_5.pkl"
   model = NeuralNetworkClassifier()
-  model_name = "lstm_classifier_2"
+  model_name = "lstm_classifier_july7-morning"
 
-  epochs = 100
-  learning_rate = 0.0001
+  epochs = 1000000
+  learning_rate = 0.0000001
   batch_size = 16
   criterion = nn.BCEWithLogitsLoss()
   alpha = 0.25
   gamma = 2
   optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+  print(f"Training model {model_name}")
+  print(f"Learning rate: {learning_rate} | Epochs: {epochs} | Batch size: {batch_size}")
 
   # Initialise wandb
   wandb.init(
@@ -468,22 +435,25 @@ if TRAINING:
       config={
       "existing_model": "none",
       "model_name": model_name,
+      "hidden_nodes": 2,
       "learning_rate": learning_rate,
       "epochs": epochs,
       "batch_size": batch_size,
-      "number of"
+      "number of training sequences": len(train_sequences)
       }
   )
   
   # Train model
   start_time = time.time()
+  best_loss = 10000
   for epoch in range(epochs):
     # Go through batches
     for i, (input_sequences, input_labels) in enumerate(train_loader):
-      
-      pred_labels = model(torch.tensor(input_sequences, dtype=torch.float32))
-      pred_labels = pred_labels.squeeze(2) # Remove dimension of size 1 [Batch size, Sequence length, 1] -> [Batch size, Seqeuence length]
-      loss = criterion(pred_labels, torch.tensor(input_labels, dtype=torch.float32))
+      input_sequences = torch.tensor(input_sequences, dtype=torch.float32)
+      input_labels = torch.tensor(input_labels, dtype=torch.float32)
+      pred_labels = model(input_sequences)[:, -1, :]
+      pred_labels = pred_labels.squeeze(1) # Remove dimension of size 1 [Batch size, Sequence length, 1] -> [Batch size, Seqeuence length]
+      loss = criterion(pred_labels, input_labels)
       # p_t = torch.exp(-bce_loss)
       # focal_loss = alpha* (1 - p_t) ** gamma * bce_loss
       # loss = focal_loss.mean()
@@ -492,17 +462,20 @@ if TRAINING:
     # Log losses to wandb
     if epoch % 10 == 0:
       wandb.log({"loss": loss})
-      test_input_sequences = torch.tensor(test_sequences_with_shuffled[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-      test_input_labels = torch.tensor(test_labels_with_shuffled[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
-      test_pred = model(test_input_sequences)
-      test_loss = criterion(test_pred.squeeze(2), test_input_labels)
+      test_input_sequences = torch.tensor(test_sequences[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+      test_input_labels = torch.tensor(test_labels[:batch_size], dtype=torch.float32) # Shape: [N: batch size (8), L: sequence length (100), H: input dimension (2))]
+      test_pred = model(test_input_sequences)[:, -1, :]
+      test_pred = test_pred.squeeze(1)
+      test_loss = criterion(test_pred, test_input_labels)
+      if (test_loss < best_loss):
+        best_loss = test_loss
+        joblib.dump(model, os.path.join(model_dir, model_name))
+        print("Saved Model")
       # p_t = torch.exp(-bce_test_loss)
       # focal_loss = alpha* (1 - p_t) ** gamma * bce_test_loss
       # test_loss = focal_loss.mean()
       wandb.log({"valid_loss": test_loss})
       print(f"Epoch: {epoch} | Loss: {loss} | Valid Loss: {test_loss}")
-      joblib.dump(model, os.path.join(model_dir, model_name))
-      print("Saved Model")
   print(time.time() - start_time)
   wandb.finish()
   

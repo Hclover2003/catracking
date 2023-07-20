@@ -33,6 +33,18 @@ if __name__ == '__main__':
     import torch
     import time
 
+    # Set seed for reproducibility
+    SEED = 0
+    np.random.seed(SEED)
+    random.seed(SEED)
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed(SEED)
+    os.environ["PYTHONHASHSEED"] = str(SEED)
+    print("Seed set")
+
+    WANDB_API_KEY = "9623d3970461071fa95cf35f8c34d09b2f3fa223"
+    os.environ["WANDB_API_KEY"] = WANDB_API_KEY
+    
     ## DEFINE UNET MODEL
 
     x_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\original\train"
@@ -43,6 +55,15 @@ if __name__ == '__main__':
 
     x_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\original\test"
     y_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\test"
+
+    # x_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\original\train"
+    # y_train_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\train"
+
+    # x_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\original\valid"
+    # y_valid_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\valid"
+
+    # x_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\original\test"
+    # y_test_dir=r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_data_excerpt\ground_truth\test"
 
     height, width = cv2.imread(os.path.join(x_train_dir, os.listdir(x_train_dir)[0])).shape[:2]
 
@@ -66,12 +87,13 @@ if __name__ == '__main__':
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     TRAINING = True
-    NEW = True
-    TESTING = True
+    NEW = False
+    TESTING = False
 
     if TRAINING:
-        lr = 0.001
-        epochs = 2
+        lr = 0.00001
+        epochs = 100
+        model_name = "model-july19"
         # start a new wandb run to track this script
         wandb.init(
             # set the wandb project where this run will be logged
@@ -83,12 +105,13 @@ if __name__ == '__main__':
             "architecture": "CNN",
             "dataset": "CIFAR-100",
             "epochs": epochs,
+            "modelname": model_name
             }
         )
         if NEW:
             model = UNet()
         else:
-            model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model8_full.pkl") # load model
+            model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model-july18.pkl") # load model
         class_labels = {
         0: "background",
         1: "calcium",
@@ -117,6 +140,7 @@ if __name__ == '__main__':
                 print(f"Step: {i}, Loss: {loss}")
                 loss_list.append(loss)
                 wandb.log({"loss": loss})
+                joblib.dump(model, rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\{model_name}-{epoch}.pkl")
 
             for i, data in enumerate(valid_loader):
                 valid_inputs, valid_labels = data
@@ -143,7 +167,7 @@ if __name__ == '__main__':
             print(f"Time elapsed: {time.time() - start} seconds")
         print(f"Total time: {time.time() - start} seconds")
         wandb.log({"Table" : table})
-        joblib.dump(model, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model_1_full.pkl")
+        joblib.dump(model, rf"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\{model_name}.pkl")
         wandb.finish()
         try:
             joblib.dump(loss_list, r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\loss_list_1_full.pkl")
@@ -151,7 +175,40 @@ if __name__ == '__main__':
             print("Failed to save loss list")
 
     if TESTING:
-        model = joblib.load(r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet\model5_full.pkl")
+        model_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\models\unet"
+        model_name = "model5_full.pkl"
+        model = joblib.load(os.path.join(model_dir, model_name))
+        video_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\images\original"
+        video = "11408"
+        video_folder = os.path.join(video_dir, video)
+        width, height = cv2.imread(os.path.join(video_folder, os.listdir(video_folder)[0])).shape[:2]
+        save_dir = r"C:\Users\hozhang\Desktop\CaTracking\huayin_unet_lstm\unet_output"
+        save_folder = os.path.join(save_dir, video, model_name[:-4])
+        if not os.path.exists(save_folder):
+            os.makedirs(save_folder)
+        for img_path in os.listdir(video_folder):
+            img = cv2.cvtColor(cv2.imread(os.path.join(video_folder, img_path)), cv2.COLOR_BGR2GRAY)
+            _transform = []
+            _transform.append(transforms.ToTensor())
+            img_size = 512
+            max_dim = max(img_size, width, height)
+            pad_left = (max_dim-width)//2
+            pad_right = max_dim-width-pad_left
+            pad_top = (max_dim-height)//2
+            pad_bottom = max_dim-height-pad_top
+            _transform.append(transforms.Pad(padding=(pad_left, pad_top, pad_right, pad_bottom), 
+                                            padding_mode='edge'))
+            _transform.append(transforms.Resize(interpolation=transforms.InterpolationMode.NEAREST_EXACT,size=(img_size, img_size)))  
+            _transform.append(transforms.Normalize(mean=[0.5], std=[0.5]))
+            transformed_img = transforms.Compose(_transform)(img)
+            pred = model(transformed_img.unsqueeze(0))
+            pred_mask = np.argmax(pred.squeeze(0).detach(), 0)
+            plt.imshow(pred_mask, cmap='gray')
+            plt.savefig(os.path.join(save_folder, img_path))
+            plt.close()
+            print(f"Done frame {img_path}")
+        exit()
+
         image, gt_mask = train_dataset[2] # image and ground truth from test dataset
         print(image.shape, gt_mask.shape) # [1, 512, 512] and [2, 512, 512]
         print(image)
